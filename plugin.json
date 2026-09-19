@@ -1,0 +1,11 @@
+{
+  "name": "SaveWaypoint",
+  "author": "koua29",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["saves", "backup", "sync", "cloud", "emulation"],
+    "description": "Auto-detect and sync your non-Steam game saves (emulators, Proton) to your own private GitHub repo. Set a waypoint for your saves.",
+    "image": "https://raw.githubusercontent.com/koua29/savewaypoint/main/assets/logo.png"
+  }
+}
