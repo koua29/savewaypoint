@@ -209,7 +209,10 @@ function Content() {
     setBusy(false);
     setUpdate(u);
     if (!u) toast("SaveWaypoint", "Could not reach GitHub for updates");
-    else if (!u.available && !u.rollback) toast("SaveWaypoint", "You're up to date");
+    else if (!u.available && !u.rollback)
+      // Naming the channel matters: "up to date" on stable while a newer beta
+      // exists is otherwise indistinguishable from a broken check.
+      toast("SaveWaypoint", `Up to date on the ${u.channel} channel`);
   };
 
   const toggleBeta = async (on: boolean) => {
@@ -338,6 +341,8 @@ function Content() {
 
   if (!status) return <PanelSection title="SaveWaypoint">Loading…</PanelSection>;
 
+  const runningBeta = /-(?:beta|rc|alpha)/i.test(version?.version ?? "");
+
   // Shown on both the connected and the not-yet-connected screens, so an update
   // is never gated behind signing in.
   const updateSection = (
@@ -356,6 +361,16 @@ function Content() {
           onChange={toggleBeta}
         />
       </PanelSectionRow>
+      {/* Running a pre-release while the channel is off is a dead end: newer
+          betas are filtered out, so nothing ever shows up. Say so. */}
+      {runningBeta && !version?.beta && (
+        <PanelSectionRow>
+          <span style={{ fontSize: "0.85em", opacity: 0.9 }}>
+            You are running a beta build while the beta channel is off, so newer
+            betas are hidden. Turn on <b>Beta channel</b> to receive them.
+          </span>
+        </PanelSectionRow>
+      )}
       <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => doCheckUpdate(true)} disabled={busy}>
           Check for updates
