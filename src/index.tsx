@@ -28,7 +28,7 @@ const loginPoll = callable<[], any>("login_poll");
 const loginCancel = callable<[], any>("login_cancel");
 const disconnect = callable<[], any>("disconnect");
 const scan = callable<[boolean], any>("scan");
-const setSelection = callable<[string[]], any>("set_selection");
+const selectEntry = callable<[string, boolean], any>("select_entry");
 const backup = callable<[string[] | null], any>("backup");
 const restore = callable<[string, string | null], any>("restore");
 const testEntry = callable<[string], any>("test_entry");
@@ -409,10 +409,18 @@ function Content() {
     setDevice(r);
   };
 
+  // Functional update, and a per-entry backend call. Reading `entries` here would
+  // use the copy captured when the modal opened, so each tick would rewrite the
+  // whole selection from a stale list and wipe the others.
   const toggle = async (id: string, on: boolean) => {
-    const next = entries.map((e) => (e.id === id ? { ...e, selected: on } : e));
-    setEntries(next);
-    await setSelection(next.filter((e) => e.selected).map((e) => e.id));
+    setEntries((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, selected: on } : e))
+    );
+    try {
+      await selectEntry(id, on);
+    } catch (e: any) {
+      toast("Selection failed", String(e?.message ?? e));
+    }
   };
 
   const doBackup = async () => {

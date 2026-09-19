@@ -227,6 +227,26 @@ class Plugin:
         out = [dict(e, selected=e["id"] in selected) for e in entries]
         return {"ok": True, "entries": out}
 
+    async def select_entry(self, entry_id: str, enabled: bool):
+        """Add or remove ONE entry.
+
+        The frontend must never send the whole set: the manager modal captures a
+        snapshot of the list when it opens, so a full-set write built from that
+        stale copy silently dropped every other selection.
+        """
+        selected = list(self.settings.get("selected"))
+        if enabled and entry_id not in selected:
+            selected.append(entry_id)
+        elif not enabled and entry_id in selected:
+            selected.remove(entry_id)
+        self.settings.set("selected", selected)
+        if enabled:
+            entry = next((e for e in self._entries() if e["id"] == entry_id), None)
+            if entry:
+                self.settings.remember_path(entry)
+                self.settings.save()
+        return {"ok": True, "selected": selected}
+
     async def set_selection(self, ids):
         ids = list(ids or [])
         self.settings.set("selected", ids)
