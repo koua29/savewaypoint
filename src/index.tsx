@@ -3,6 +3,7 @@ import {
   ConfirmModal,
   DialogButton,
   Focusable,
+  ModalRoot,
   PanelSection,
   PanelSectionRow,
   TextField,
@@ -30,6 +31,7 @@ const setSelection = callable<[string[]], any>("set_selection");
 const backup = callable<[string[] | null], any>("backup");
 const restore = callable<[string, string | null], any>("restore");
 const testEntry = callable<[string], any>("test_entry");
+const historyOf = callable<[string], any>("history");
 const getVersion = callable<[], any>("get_version");
 const setBeta = callable<[boolean], any>("set_beta");
 const checkUpdate = callable<[boolean], any>("check_update");
@@ -91,6 +93,46 @@ type Entry = {
   size_bytes: number;
   selected: boolean;
 };
+
+type Commit = { sha: string; date: string; message: string };
+
+/** Lets the user roll a save back to an earlier backup. Every backup is a git
+ *  commit, so the commit list IS the version history. */
+function VersionPicker({
+  name,
+  commits,
+  onPick,
+  closeModal,
+}: {
+  name: string;
+  commits: Commit[];
+  onPick: (sha: string) => void;
+  closeModal?: () => void;
+}) {
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div style={{ fontWeight: "bold", marginBottom: "10px" }}>
+        {`Earlier backups of ${name}`}
+      </div>
+      <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: "12px" }}>
+        Restoring overwrites the save on this device. This cannot be undone.
+      </div>
+      <Focusable style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        {commits.map((c, i) => (
+          <DialogButton
+            key={c.sha}
+            onClick={() => {
+              closeModal?.();
+              onPick(c.sha);
+            }}
+          >
+            {`${new Date(c.date).toLocaleString()}${i === 0 ? "  (newest)" : ""}`}
+          </DialogButton>
+        ))}
+      </Focusable>
+    </ModalRoot>
+  );
+}
 
 const DOT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
 
@@ -230,6 +272,14 @@ function Content() {
     );
   };
 
+  const runRestore = async (e: Entry, ref: string | null) => {
+    setBusy(true);
+    const r = await restore(e.id, ref);
+    setBusy(false);
+    toast("SaveWaypoint", r.ok ? `Restored ${e.name}` : `Error: ${r.error}`);
+    if (r.ok) doScan(true);
+  };
+
   // Restoring overwrites the local save, so always confirm first.
   const doRestore = (e: Entry) => {
     showModal(
@@ -240,13 +290,25 @@ function Content() {
           "version stored in your GitHub repo. This cannot be undone."
         }
         strOKButtonText="Restore"
-        onOK={async () => {
-          setBusy(true);
-          const r = await restore(e.id, null);
-          setBusy(false);
-          toast("SaveWaypoint", r.ok ? `Restored ${e.name}` : `Error: ${r.error}`);
-          if (r.ok) doScan(true);
-        }}
+        onOK={() => runRestore(e, null)}
+      />
+    );
+  };
+
+  const doHistory = async (e: Entry) => {
+    setBusy(true);
+    const r = await historyOf(e.id);
+    setBusy(false);
+    const commits: Commit[] = r?.commits ?? [];
+    if (!r?.ok || commits.length === 0) {
+      toast(e.name, r?.error ? `⚠️ ${r.error}` : "No backup history yet");
+      return;
+    }
+    showModal(
+      <VersionPicker
+        name={e.name}
+        commits={commits}
+        onPick={(sha) => runRestore(e, sha)}
       />
     );
   };
@@ -433,6 +495,13 @@ function Content() {
                   onClick={() => doRestore(e)}
                 >
                   Restore
+                </DialogButton>
+                <DialogButton
+                  style={{ flex: 1 }}
+                  disabled={busy}
+                  onClick={() => doHistory(e)}
+                >
+                  History
                 </DialogButton>
               </Focusable>
             </Focusable>

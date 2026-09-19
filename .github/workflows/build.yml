@@ -48,9 +48,13 @@ jobs:
 
       # A tag push publishes the zip so Decky can install it straight from the
       # release URL.
+      # The tag decides the channel: v1.2.3 is stable, v1.2.3-beta.N ships as a
+      # pre-release so only users on the beta channel are offered it.
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: release/SaveWaypoint.zip
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
