@@ -162,6 +162,7 @@ function Content() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [clientId, setCid] = useState("");
   const [device, setDevice] = useState<any>(null);
+  const [polls, setPolls] = useState(0);
   const [busy, setBusy] = useState(false);
   const [scanned, setScanned] = useState(false);
   const [version, setVersion] = useState<any>(null);
@@ -237,23 +238,48 @@ function Content() {
   };
 
   // Poll the device-flow login until the user approves it on their phone.
+  // A self-scheduling timeout, not setInterval: each poll is async, so a fixed
+  // interval would overlap requests, which is what makes GitHub answer
+  // slow_down. The backend tells us how long to wait after a back-off.
   useEffect(() => {
     if (!device) return;
-    const iv = setInterval(async () => {
-      const r = await loginPoll();
-      if (r.state === "ok") {
-        clearInterval(iv);
-        setDevice(null);
-        toast("SaveWaypoint", `Connected as ${r.login}`);
-        await refresh();
-        doScan(true);
-      } else if (r.state === "error") {
-        clearInterval(iv);
-        setDevice(null);
-        toast("SaveWaypoint", `Login failed: ${r.error}`);
+    let cancelled = false;
+    let timer: any;
+    let wait = (device.interval || 5) * 1000;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const r = await loginPoll();
+        if (cancelled) return;
+        if (r.state === "ok") {
+          setDevice(null);
+          toast("SaveWaypoint", `Connected as ${r.login}`);
+          await refresh();
+          doScan(true);
+          return;
+        }
+        if (r.state === "error") {
+          setDevice(null);
+          toast("Sign-in failed", r.error);
+          return;
+        }
+        if (r.interval) wait = r.interval * 1000;
+        setPolls((n) => n + 1);
+        if (r.warning) console.warn("[SaveWaypoint] poll", r.warning);
+      } catch (e: any) {
+        // Must not stop the loop: one failed request is not a failed sign-in.
+        console.error("[SaveWaypoint] poll error", e);
+        setPolls((n) => n + 1);
       }
-    }, (device.interval || 5) * 1000);
-    return () => clearInterval(iv);
+      timer = setTimeout(tick, wait);
+    };
+
+    timer = setTimeout(tick, wait);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [device]);
 
   const doConnect = async () => {
@@ -270,6 +296,7 @@ function Content() {
       toast("SaveWaypoint", r.error);
       return;
     }
+    setPolls(0);
     setDevice(r);
   };
 
@@ -457,7 +484,17 @@ function Content() {
               {device.user_code}
             </div>
           </PanelSectionRow>
-          <PanelSectionRow>Waiting for approval…</PanelSectionRow>
+          <PanelSectionRow>
+            {`Waiting for approval… (checked ${polls}×)`}
+          </PanelSectionRow>
+          {polls >= 6 && (
+            <PanelSectionRow>
+              <span style={{ fontSize: "0.85em", opacity: 0.85 }}>
+                Already approved on GitHub? Cancel and press Connect again — the
+                code may have expired.
+              </span>
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <ButtonItem
               layout="below"

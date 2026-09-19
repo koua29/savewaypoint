@@ -112,6 +112,10 @@ def _form_request(url, fields):
             raise GitHubError(f"HTTP {e.code} from GitHub")
     except urllib.error.URLError as e:
         raise GitHubError(_net_error(e))
+    except Exception as e:
+        # A read timeout arrives as a bare TimeoutError, not a URLError. Left
+        # loose it escapes the poller and the sign-in screen waits forever.
+        raise GitHubError(f"{type(e).__name__}: {e}")
 
 
 # --- Device flow -------------------------------------------------------------

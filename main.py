@@ -142,7 +142,11 @@ class Plugin:
             d = gh.device_start(client_id)
         except gh.GitHubError as e:
             return {"ok": False, "error": str(e)}
-        self._device = {"device_code": d["device_code"], "interval": d.get("interval", 5)}
+        self._device = {
+            "device_code": d["device_code"],
+            "interval": max(int(d.get("interval", 5)), 5),
+            "failures": 0,
+        }
         return {
             "ok": True,
             "user_code": d["user_code"],
@@ -152,26 +156,50 @@ class Plugin:
         }
 
     async def login_poll(self):
+        """One poll step. Never raises: anything escaping here rejects the
+        frontend's promise and the sign-in screen waits for approval forever."""
         if not self._device:
             return {"state": "error", "error": "no login in progress"}
         client_id = self.settings.get("client_id")
         try:
-            state, payload = gh.device_poll(client_id, self._device["device_code"])
+            state, payload = await asyncio.to_thread(
+                gh.device_poll, client_id, self._device["device_code"])
         except gh.GitHubError as e:
-            return {"state": "error", "error": str(e)}
+            # Transient: keep waiting rather than killing a valid sign-in.
+            self._device["failures"] = self._device.get("failures", 0) + 1
+            decky.logger.warning("device poll failed: %s", e)
+            if self._device["failures"] >= 5:
+                self._device = None
+                return {"state": "error", "error": str(e)}
+            return {"state": "pending", "warning": str(e),
+                    "interval": self._device["interval"]}
+        except Exception as e:
+            decky.logger.exception("device poll crashed")
+            self._device = None
+            return {"state": "error", "error": f"{type(e).__name__}: {e}"}
+
+        self._device["failures"] = 0
         if state == "ok":
             try:
-                user = gh.get_user(payload)
-            except gh.GitHubError as e:
+                user = await asyncio.to_thread(gh.get_user, payload)
+            except Exception as e:
+                self._device = None
                 return {"state": "error", "error": str(e)}
             self.settings.set("token", payload)
             self.settings.set("login", user["login"])
             self._device = None
             return {"state": "ok", "login": user["login"]}
+        if state == "slow_down":
+            # GitHub requires backing off by 5s; ignoring it means slow_down
+            # forever and the token is never issued.
+            self._device["interval"] += 5
+            decky.logger.info("device poll backing off to %ss",
+                              self._device["interval"])
+            return {"state": "pending", "interval": self._device["interval"]}
         if state in ("expired", "denied", "error"):
             self._device = None
             return {"state": "error", "error": payload}
-        return {"state": state}
+        return {"state": "pending", "interval": self._device["interval"]}
 
     async def login_cancel(self):
         self._device = None
