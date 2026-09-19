@@ -19,6 +19,7 @@ on the Deck.
 
 import io
 import os
+import ssl
 import json
 import time
 import base64
@@ -26,6 +27,8 @@ import tarfile
 import urllib.parse
 import urllib.request
 import urllib.error
+
+from net import SSL_CONTEXT, describe_tls
 
 API = "https://api.github.com"
 DEVICE_CODE_URL = "https://github.com/login/device/code"
@@ -44,6 +47,14 @@ class GitHubError(Exception):
     pass
 
 
+def _net_error(exc):
+    """Turn urllib's opaque URLError into something actionable."""
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, ssl.SSLError) or "CERTIFICATE" in str(reason).upper():
+        return (f"TLS error: {reason}. Certificate store in use: {describe_tls()}")
+    return f"network error: {reason}"
+
+
 def _request(method, url, token=None, data=None, accept="application/json"):
     headers = {"Accept": accept, "User-Agent": USER_AGENT}
     if token:
@@ -54,7 +65,7 @@ def _request(method, url, token=None, data=None, accept="application/json"):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=60, context=SSL_CONTEXT) as resp:
             raw = resp.read().decode("utf-8")
             return resp.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
@@ -65,7 +76,7 @@ def _request(method, url, token=None, data=None, accept="application/json"):
             parsed = {"message": raw}
         return e.code, parsed
     except urllib.error.URLError as e:
-        raise GitHubError(f"network error: {e}")
+        raise GitHubError(_net_error(e))
 
 
 def _request_raw(url, token):
@@ -78,12 +89,12 @@ def _request_raw(url, token):
     }
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=120, context=SSL_CONTEXT) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
     except urllib.error.URLError as e:
-        raise GitHubError(f"network error: {e}")
+        raise GitHubError(_net_error(e))
 
 
 def _form_request(url, fields):
@@ -92,7 +103,7 @@ def _form_request(url, fields):
     headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=SSL_CONTEXT) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
@@ -100,7 +111,7 @@ def _form_request(url, fields):
         except ValueError:
             raise GitHubError(f"HTTP {e.code} from GitHub")
     except urllib.error.URLError as e:
-        raise GitHubError(f"network error: {e}")
+        raise GitHubError(_net_error(e))
 
 
 # --- Device flow -------------------------------------------------------------

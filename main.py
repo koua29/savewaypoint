@@ -22,6 +22,22 @@ SCAN_TTL = 20.0  # seconds a scan result stays usable (toggling must not rescan)
 CURRENT_VERSION = getattr(decky, "DECKY_PLUGIN_VERSION", "0.0.0")
 
 
+def _client_id_problem(value):
+    """A GitHub OAuth App Client ID is a generated token ('Ov23li...' on newer
+    apps, 20 hex chars on older ones) - not the account name, which is the most
+    natural thing to type here. Say so before the request fails obscurely."""
+    if not value:
+        return "paste the Client ID from your GitHub OAuth App"
+    if " " in value:
+        return "a Client ID has no spaces"
+    if len(value) < 16:
+        return (f"'{value}' is too short to be a Client ID - that looks like your "
+                "GitHub username. Open Settings > Developer settings > OAuth Apps "
+                "on github.com, create an app with Device Flow enabled, and copy "
+                "its Client ID (starts with 'Ov23li').")
+    return None
+
+
 def _target_ids():
     """uid/gid of the Steam user, so files restored while running as root stay
     writable by the game."""
@@ -78,7 +94,15 @@ class Plugin:
         }
 
     async def set_client_id(self, client_id: str):
-        self.settings.set("client_id", (client_id or "").strip())
+        client_id = (client_id or "").strip()
+        problem = _client_id_problem(client_id)
+        if problem:
+            return {"ok": False, "error": problem}
+        self.settings.set("client_id", client_id)
+        return {"ok": True}
+
+    async def clear_client_id(self):
+        self.settings.set("client_id", "")
         return {"ok": True}
 
     async def set_pat(self, token: str):

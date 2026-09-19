@@ -14,6 +14,8 @@ import json
 import urllib.request
 import urllib.error
 
+from net import SSL_CONTEXT
+
 REPO = "koua29/savewaypoint"
 ZIP_NAME = "SaveWaypoint.zip"
 UPDATE_INTERVAL = 86400  # at most one GitHub check per day
@@ -27,7 +29,7 @@ def _http(url):
         "Accept": "application/vnd.github+json",
         "User-Agent": USER_AGENT,
     })
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=20, context=SSL_CONTEXT) as resp:
         return resp.read().decode("utf-8")
 
 

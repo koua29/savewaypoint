@@ -22,6 +22,7 @@ const INSTALL_TYPE_UPDATE = 1;
 // --- Backend bindings --------------------------------------------------------
 const getStatus = callable<[], any>("get_status");
 const setClientId = callable<[string], any>("set_client_id");
+const clearClientId = callable<[], any>("clear_client_id");
 const loginStart = callable<[], any>("login_start");
 const loginPoll = callable<[], any>("login_poll");
 const loginCancel = callable<[], any>("login_cancel");
@@ -238,7 +239,14 @@ function Content() {
   }, [device]);
 
   const doConnect = async () => {
-    if (clientId.trim()) await setClientId(clientId.trim());
+    if (clientId.trim()) {
+      const saved = await setClientId(clientId.trim());
+      if (!saved.ok) {
+        toast("Client ID", saved.error);
+        return;
+      }
+      await refresh();
+    }
     const r = await loginStart();
     if (!r.ok) {
       toast("SaveWaypoint", r.error);
@@ -418,10 +426,17 @@ function Content() {
     return (
       <>
         <PanelSection title="Connect GitHub">
-          {!status.has_client_id && (
+          {status.has_client_id ? (
+            <PanelSectionRow>
+              <span style={{ fontSize: "0.85em", opacity: 0.8 }}>
+                A Client ID is saved. Wrong one? Clear it and paste another.
+              </span>
+            </PanelSectionRow>
+          ) : (
             <PanelSectionRow>
               <TextField
                 label="GitHub OAuth Client ID"
+                description="From your OAuth App on github.com — starts with 'Ov23li'. This is NOT your username."
                 value={clientId}
                 onChange={(e) => setCid(e.target.value)}
               />
@@ -432,6 +447,20 @@ function Content() {
               Connect GitHub
             </ButtonItem>
           </PanelSectionRow>
+          {status.has_client_id && (
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={async () => {
+                  await clearClientId();
+                  setCid("");
+                  refresh();
+                }}
+              >
+                Clear Client ID
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <span style={{ fontSize: "0.8em", opacity: 0.7 }}>
               Your saves go to a private repo on your own account. See the README to
