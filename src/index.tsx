@@ -406,9 +406,12 @@ function Content() {
       toast(e.name, `⚠️ ${r.error}`);
       return;
     }
+    // Says what was actually proven, so "Test" has an obvious purpose: this save
+    // can be backed up AND put back, checked without uploading anything.
     const parts = [
-      "✅ readable",
-      r.restorable ? "restorable" : "⚠️ folder is read-only",
+      r.restorable
+        ? "✅ can be backed up and restored"
+        : "⚠️ readable, but the folder is read-only — a restore would fail",
       humanSize(r.archive_size),
     ];
     if (r.warn_large) parts.push("⚠️ large");
@@ -596,6 +599,17 @@ function Content() {
       </PanelSection>
 
       <PanelSection title={`Detected saves (${entries.length})`}>
+        {/* The switch only marks a save for syncing; nothing is ever uploaded
+            without pressing Back up now. Saying so here because a toggle reads
+            like it performs the action. */}
+        {entries.length > 0 && (
+          <PanelSectionRow>
+            <span style={{ fontSize: "0.8em", opacity: 0.75 }}>
+              Switch on what to sync, then press <b>Back up now</b>. Nothing is
+              uploaded until you do.
+            </span>
+          </PanelSectionRow>
+        )}
         {entries.length === 0 && (
           <PanelSectionRow>
             {scanned
@@ -619,13 +633,23 @@ function Content() {
                   history of an unselected game is meaningless, and showing the
                   row for every entry triples the length of the list. */}
               {e.selected && (
+                <>
+                  <span
+                    style={{
+                      fontSize: "0.72em",
+                      opacity: 0.6,
+                      paddingBottom: "3px",
+                    }}
+                  >
+                    check · restore · older versions
+                  </span>
                 <Focusable
                   style={{ display: "flex", gap: "6px", paddingBottom: "10px" }}
                 >
                   <DialogButton
                     style={ACTION_BTN}
                     onClick={() => doTest(e)}
-                    onOKActionDescription="Test"
+                    onOKActionDescription="Check it works (no upload)"
                   >
                     <FaVial />
                   </DialogButton>
@@ -633,7 +657,7 @@ function Content() {
                     style={ACTION_BTN}
                     disabled={busy}
                     onClick={() => doRestore(e)}
-                    onOKActionDescription="Restore"
+                    onOKActionDescription="Restore from cloud"
                   >
                     <FaDownload />
                   </DialogButton>
@@ -641,11 +665,12 @@ function Content() {
                     style={ACTION_BTN}
                     disabled={busy}
                     onClick={() => doHistory(e)}
-                    onOKActionDescription="History"
+                    onOKActionDescription="Older versions"
                   >
                     <FaHistory />
                   </DialogButton>
                 </Focusable>
+                </>
               )}
             </Focusable>
           </PanelSectionRow>
