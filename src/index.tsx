@@ -13,8 +13,8 @@ import {
 } from "@decky/ui";
 import { Navigation } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
-import { useEffect, useRef, useState } from "react";
-import { FaMapPin } from "react-icons/fa";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { FaMapPin, FaVial, FaDownload, FaHistory } from "react-icons/fa";
 
 const PLUGIN_NAME = "SaveWaypoint";
 const INSTALL_TYPE_UPDATE = 1;
@@ -139,10 +139,23 @@ function VersionPicker({
 
 const DOT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
 
+// Kept terse: the panel is ~310px wide, so a long line wraps to three rows and
+// turns a ten-game list into a scrolling marathon.
 const HINT: Record<string, string> = {
   green: "detected",
-  yellow: "probable — confirm before syncing",
-  red: "nothing saved yet",
+  yellow: "probable",
+  red: "no save yet",
+};
+
+// Three buttons only fit across the panel without text labels. flex:1 with
+// minWidth:0 stops DialogButton's default min-width from forcing an overflow.
+const ACTION_BTN: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  padding: "6px 0",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
 };
 
 const humanSize = (b: number) => {
@@ -419,7 +432,7 @@ function Content() {
       <PanelSectionRow>
         <ToggleField
           label="Beta channel"
-          description="Receive pre-releases. Newer features, less tested."
+          description="Pre-releases: newer, less tested."
           checked={!!version?.beta}
           onChange={toggleBeta}
         />
@@ -582,19 +595,7 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title="Detected saves">
-        <PanelSectionRow>
-          <ToggleField
-            label="Include Steam games"
-            description="Off by default: Steam Cloud already syncs them. Turn on only for games without Cloud support."
-            checked={!!status.show_steam}
-            onChange={async (v) => {
-              setStatus((s: any) => ({ ...s, show_steam: v }));
-              await setShowSteam(v);
-              doScan(true);
-            }}
-          />
-        </PanelSectionRow>
+      <PanelSection title={`Detected saves (${entries.length})`}>
         {entries.length === 0 && (
           <PanelSectionRow>
             {scanned
@@ -607,40 +608,63 @@ function Content() {
             <Focusable style={{ display: "flex", flexDirection: "column", width: "100%" }}>
               <ToggleField
                 label={`${DOT[e.status]} ${e.name}`}
-                description={`${
-                  e.steam_cloud ? "☁️ Steam Cloud covers this · " : ""
-                }${HINT[e.status]} · ${e.file_count} files · ${humanSize(
-                  e.size_bytes
-                )}`}
+                description={`${e.steam_cloud ? "☁️ " : ""}${HINT[e.status]} · ${
+                  e.file_count
+                } files · ${humanSize(e.size_bytes)}`}
                 checked={e.selected}
                 disabled={e.status === "red"}
                 onChange={(v) => toggle(e.id, v)}
               />
-              <Focusable style={{ display: "flex", gap: "8px", paddingBottom: "8px" }}>
-                <DialogButton style={{ flex: 1 }} onClick={() => doTest(e)}>
-                  Test
-                </DialogButton>
-                <DialogButton
-                  style={{ flex: 1 }}
-                  disabled={busy}
-                  onClick={() => doRestore(e)}
+              {/* Only for saves actually being synced: restoring or browsing the
+                  history of an unselected game is meaningless, and showing the
+                  row for every entry triples the length of the list. */}
+              {e.selected && (
+                <Focusable
+                  style={{ display: "flex", gap: "6px", paddingBottom: "10px" }}
                 >
-                  Restore
-                </DialogButton>
-                <DialogButton
-                  style={{ flex: 1 }}
-                  disabled={busy}
-                  onClick={() => doHistory(e)}
-                >
-                  History
-                </DialogButton>
-              </Focusable>
+                  <DialogButton
+                    style={ACTION_BTN}
+                    onClick={() => doTest(e)}
+                    onOKActionDescription="Test"
+                  >
+                    <FaVial />
+                  </DialogButton>
+                  <DialogButton
+                    style={ACTION_BTN}
+                    disabled={busy}
+                    onClick={() => doRestore(e)}
+                    onOKActionDescription="Restore"
+                  >
+                    <FaDownload />
+                  </DialogButton>
+                  <DialogButton
+                    style={ACTION_BTN}
+                    disabled={busy}
+                    onClick={() => doHistory(e)}
+                    onOKActionDescription="History"
+                  >
+                    <FaHistory />
+                  </DialogButton>
+                </Focusable>
+              )}
             </Focusable>
           </PanelSectionRow>
         ))}
       </PanelSection>
 
-      <PanelSection title="Account">
+      <PanelSection title="Options">
+        <PanelSectionRow>
+          <ToggleField
+            label="Include Steam games"
+            description="Steam Cloud already syncs these."
+            checked={!!status.show_steam}
+            onChange={async (v) => {
+              setStatus((s: any) => ({ ...s, show_steam: v }));
+              await setShowSteam(v);
+              doScan(true);
+            }}
+          />
+        </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem
             layout="below"
