@@ -23,6 +23,7 @@ import json
 import time
 import base64
 import tarfile
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -32,16 +33,19 @@ TOKEN_URL = "https://github.com/login/oauth/access_token"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 USER_AGENT = "SaveWaypoint/0.1"
 
+# GitHub's Contents API rejects blobs over 100 MB and gets unreliable well before
+# that once base64-encoded. Game saves are tiny, so a firm ceiling is a feature:
+# it turns a silent failure into a clear message.
+SOFT_LIMIT = 45 * 1024 * 1024
+HARD_LIMIT = 90 * 1024 * 1024
+
 
 class GitHubError(Exception):
     pass
 
 
 def _request(method, url, token=None, data=None, accept="application/json"):
-    headers = {
-        "Accept": accept,
-        "User-Agent": USER_AGENT,
-    }
+    headers = {"Accept": accept, "User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     body = None
@@ -50,7 +54,7 @@ def _request(method, url, token=None, data=None, accept="application/json"):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read().decode("utf-8")
             return resp.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
@@ -64,9 +68,26 @@ def _request(method, url, token=None, data=None, accept="application/json"):
         raise GitHubError(f"network error: {e}")
 
 
+def _request_raw(url, token):
+    """GET a file's raw bytes straight from the Contents API (handles any size
+    up to GitHub's limit, unlike the inline base64 field which caps at 1 MB)."""
+    headers = {
+        "Accept": "application/vnd.github.raw",
+        "User-Agent": USER_AGENT,
+        "Authorization": f"Bearer {token}",
+    }
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except urllib.error.URLError as e:
+        raise GitHubError(f"network error: {e}")
+
+
 def _form_request(url, fields):
     """POST application/x-www-form-urlencoded, expect JSON back (device flow)."""
-    import urllib.parse
     body = urllib.parse.urlencode(fields).encode("utf-8")
     headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -74,7 +95,10 @@ def _form_request(url, fields):
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        return json.loads(e.read().decode("utf-8", "replace"))
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except ValueError:
+            raise GitHubError(f"HTTP {e.code} from GitHub")
     except urllib.error.URLError as e:
         raise GitHubError(f"network error: {e}")
 
@@ -84,12 +108,17 @@ def _form_request(url, fields):
 def device_start(client_id, scope="repo"):
     r = _form_request(DEVICE_CODE_URL, {"client_id": client_id, "scope": scope})
     if "device_code" not in r:
-        raise GitHubError(r.get("error_description") or r.get("error") or "device_code failed")
+        msg = r.get("error_description") or r.get("error") or "device_code request failed"
+        if r.get("error") == "unauthorized_client":
+            msg = ("this OAuth App does not have Device Flow enabled - tick "
+                   "'Enable Device Flow' on its GitHub settings page")
+        raise GitHubError(msg)
     return r  # device_code, user_code, verification_uri, interval, expires_in
 
 
 def device_poll(client_id, device_code):
-    """Poll once. Returns ('pending'|'slow_down'|'ok'|'error', payload)."""
+    """Poll once. Returns (state, payload) where state is one of:
+    'ok' | 'pending' | 'slow_down' | 'expired' | 'denied' | 'error'."""
     r = _form_request(TOKEN_URL, {
         "client_id": client_id,
         "device_code": device_code,
@@ -98,10 +127,14 @@ def device_poll(client_id, device_code):
     if "access_token" in r:
         return "ok", r["access_token"]
     err = r.get("error")
-    if err in ("authorization_pending",):
+    if err == "authorization_pending":
         return "pending", None
     if err == "slow_down":
         return "slow_down", None
+    if err == "expired_token":
+        return "expired", "the code expired - start again"
+    if err == "access_denied":
+        return "denied", "you declined the request on GitHub"
     return "error", r.get("error_description") or err or "unknown error"
 
 
@@ -109,9 +142,11 @@ def device_poll(client_id, device_code):
 
 def get_user(token):
     status, data = _request("GET", f"{API}/user", token=token)
+    if status == 401:
+        raise GitHubError("token rejected by GitHub (expired or revoked)")
     if status != 200:
         raise GitHubError(data.get("message", f"HTTP {status}"))
-    return data  # login, ...
+    return data
 
 
 def ensure_repo(token, owner, repo, private=True):
@@ -128,8 +163,8 @@ def ensure_repo(token, owner, repo, private=True):
     })
     if status not in (200, 201):
         raise GitHubError(data.get("message", f"HTTP {status}"))
-    # small delay so auto_init commit lands before first content push
-    time.sleep(1.5)
+    # Let the auto_init commit land before the first content push.
+    time.sleep(2)
     return data
 
 
@@ -139,7 +174,12 @@ def make_archive_bytes(folder):
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         tar.add(folder, arcname=".")
-    return buf.getvalue()
+    blob = buf.getvalue()
+    if len(blob) > HARD_LIMIT:
+        raise GitHubError(
+            f"save is too large for the GitHub API ({len(blob) // (1024*1024)} MB, "
+            f"limit {HARD_LIMIT // (1024*1024)} MB)")
+    return blob
 
 
 def extract_archive_bytes(raw, dest_folder):
@@ -150,24 +190,54 @@ def extract_archive_bytes(raw, dest_folder):
 
 
 def _safe_extract(tar, dest):
+    """Reject path traversal, then extract with the hardened filter when the
+    running Python supports it (3.12+)."""
     dest_abs = os.path.abspath(dest)
     for member in tar.getmembers():
         target = os.path.abspath(os.path.join(dest, member.name))
-        if not target.startswith(dest_abs + os.sep) and target != dest_abs:
+        if target != dest_abs and not target.startswith(dest_abs + os.sep):
             raise GitHubError(f"unsafe path in archive: {member.name}")
-    tar.extractall(dest)
+        if member.issym() or member.islnk():
+            link_target = os.path.abspath(
+                os.path.join(os.path.dirname(target), member.linkname))
+            if not link_target.startswith(dest_abs + os.sep):
+                raise GitHubError(f"unsafe link in archive: {member.name}")
+    try:
+        tar.extractall(dest, filter="data")
+    except TypeError:
+        tar.extractall(dest)
+
+
+def chown_tree(path, uid, gid):
+    """After a restore performed as root, hand the files back to the game's user
+    or the game will not be able to write its own save."""
+    if uid is None or gid is None:
+        return
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                os.chown(os.path.join(root, name), uid, gid)
+            except OSError:
+                pass
+    try:
+        os.chown(path, uid, gid)
+    except OSError:
+        pass
 
 
 # --- Contents API (upload / download) ---------------------------------------
 
 def _get_sha(token, owner, repo, path):
-    status, data = _request("GET", f"{API}/repos/{owner}/{repo}/contents/{path}", token=token)
+    status, data = _request("GET", f"{API}/repos/{owner}/{repo}/contents/{path}",
+                            token=token)
     if status == 200 and isinstance(data, dict):
         return data.get("sha")
     return None
 
 
 def put_file(token, owner, repo, path, content_bytes, message):
+    if len(content_bytes) > HARD_LIMIT:
+        raise GitHubError(f"{path}: too large for the GitHub API")
     sha = _get_sha(token, owner, repo, path)
     payload = {
         "message": message,
@@ -177,34 +247,32 @@ def put_file(token, owner, repo, path, content_bytes, message):
         payload["sha"] = sha
     status, data = _request("PUT", f"{API}/repos/{owner}/{repo}/contents/{path}",
                             token=token, data=payload)
+    if status == 409:
+        raise GitHubError("repository is busy (conflict) - try again")
     if status not in (200, 201):
         raise GitHubError(data.get("message", f"HTTP {status} on PUT {path}"))
     return data
 
 
 def get_file(token, owner, repo, path, ref=None):
-    url = f"{API}/repos/{owner}/{repo}/contents/{path}"
+    url = f"{API}/repos/{owner}/{repo}/contents/{urllib.parse.quote(path)}"
     if ref:
-        url += f"?ref={ref}"
-    status, data = _request("GET", url, token=token)
+        url += f"?ref={urllib.parse.quote(ref)}"
+    status, raw = _request_raw(url, token)
     if status == 404:
         return None
     if status != 200:
-        raise GitHubError(data.get("message", f"HTTP {status}"))
-    if data.get("encoding") == "base64" and data.get("content"):
-        return base64.b64decode(data["content"])
-    # Large files (>1MB) come without inline content -> use download_url.
-    dl = data.get("download_url")
-    if dl:
-        req = urllib.request.Request(dl, headers={
-            "Authorization": f"Bearer {token}", "User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.read()
-    return None
+        try:
+            msg = json.loads(raw.decode("utf-8")).get("message", f"HTTP {status}")
+        except Exception:
+            msg = f"HTTP {status}"
+        raise GitHubError(msg)
+    return raw
 
 
 def list_remote_entries(token, owner, repo):
-    status, data = _request("GET", f"{API}/repos/{owner}/{repo}/contents/saves", token=token)
+    status, data = _request("GET", f"{API}/repos/{owner}/{repo}/contents/saves",
+                            token=token)
     if status == 404:
         return []
     if status != 200:
@@ -213,16 +281,14 @@ def list_remote_entries(token, owner, repo):
 
 
 def file_history(token, owner, repo, path, limit=10):
-    """Commit list touching a path -> version history for the UI."""
-    url = f"{API}/repos/{owner}/{repo}/commits?path={path}&per_page={limit}"
+    """Commits touching a path -> the version history shown in the UI."""
+    url = (f"{API}/repos/{owner}/{repo}/commits"
+           f"?path={urllib.parse.quote(path)}&per_page={limit}")
     status, data = _request("GET", url, token=token)
-    if status != 200:
+    if status != 200 or not isinstance(data, list):
         return []
-    out = []
-    for c in data:
-        out.append({
-            "sha": c["sha"],
-            "date": c["commit"]["committer"]["date"],
-            "message": c["commit"]["message"],
-        })
-    return out
+    return [{
+        "sha": c["sha"],
+        "date": c["commit"]["committer"]["date"],
+        "message": c["commit"]["message"],
+    } for c in data]

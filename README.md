@@ -11,10 +11,11 @@ Steam Deck / SteamOS handhelds that **auto-detects your non-Steam game saves**
 (emulators, Proton games) and syncs them to **your own private GitHub repo** — so
 you can pick up your progress on another device.
 
-> ⚠️ **Status: early MVP, not yet tested on real hardware.** The code is complete
-> and structured, but it needs validation on an actual Steam Deck before it can be
-> called stable. Treat cloud data as non-authoritative until you've verified a full
-> backup → restore cycle yourself.
+> ⚠️ **Status: early MVP, not yet tested on real hardware.** The frontend builds
+> clean, the backend passes its checks (archive round-trip, path-traversal
+> rejection, detection rules), but nothing has run on an actual Steam Deck yet.
+> Verify a full backup → restore cycle yourself before trusting it with a save
+> you care about.
 
 ## Why
 
@@ -56,28 +57,50 @@ The phone login needs a GitHub **OAuth App** Client ID (free, 2 minutes):
 > paste a fine-grained Personal Access Token with `repo` scope (backend method
 > `set_pat`).
 
-## Build & install (developer)
+## Install
+
+Grab `SaveWaypoint.zip` from the [latest release](../../releases/latest) — it is
+built by CI and already contains everything the plugin needs (no build step, no
+Python packages to install).
+
+**Option A — install from URL (easiest)**
+
+1. On the Deck: **Decky → ⚙️ Settings → General → enable Developer mode**.
+2. **Decky → 🔌 Developer → Install Plugin from URL**.
+3. Paste the release zip URL and confirm. Done.
+
+> While this repository is private, the URL needs authentication and this option
+> will fail — use option B until the repo is public.
+
+**Option B — install from a zip on the Deck**
+
+Copy `SaveWaypoint.zip` to the Deck, then in Desktop mode:
 
 ```bash
-# needs Node + pnpm
-corepack enable
-pnpm install
-pnpm run build          # produces dist/index.js
+unzip -o SaveWaypoint.zip -d ~/homebrew/plugins/
+sudo systemctl restart plugin_loader
 ```
 
-Then copy the folder (with `dist/`, `main.py`, `py_modules/`, `plugin.json`) to
-`~/homebrew/plugins/SaveWaypoint` on the Deck and restart Decky Loader, or use the
-Decky developer "install from zip" flow.
+**Option C — build it yourself**
+
+```bash
+pnpm install
+pnpm run package        # -> release/SaveWaypoint.zip
+```
+
+Requires Node 20+ and pnpm 9. `pnpm run build` alone just produces `dist/index.js`.
 
 ## Layout
 
 ```
-main.py              Decky backend (Plugin class, async methods)
+main.py                    Decky backend (Plugin class, async methods)
 py_modules/
-  detector.py        save auto-detection (emulators + Proton scan)
-  github_store.py    GitHub device-flow auth + Contents API storage
-  swp_settings.py    local JSON settings
-src/index.tsx        React frontend (Decky UI)
+  detector.py              save auto-detection (emulators + Proton scan)
+  github_store.py          GitHub device-flow auth + Contents API storage
+  swp_settings.py          local JSON settings
+src/index.tsx              React frontend (Decky UI)
+scripts/package.sh         builds release/SaveWaypoint.zip
+.github/workflows/build.yml  CI: typecheck, compile, zip, release on tag
 ```
 
 ## Legal

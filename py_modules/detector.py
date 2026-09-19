@@ -21,7 +21,15 @@ import os
 import time
 import hashlib
 
-HOME = os.path.expanduser("~")
+# Decky may run the plugin backend as a different user than the one who owns the
+# games. DECKY_USER_HOME is the home of the actual Steam user and is the only
+# reliable base -- expanduser("~") would resolve to /root and find nothing.
+HOME = os.environ.get("DECKY_USER_HOME") or os.path.expanduser("~")
+
+# Safety rails so a pathological folder can never hang the UI.
+MAX_FILES_PER_ENTRY = 20000
+MAX_PROTON_CANDIDATES = 120
+PROTON_RECENT_DAYS = 365
 
 
 def _p(*parts):
@@ -29,15 +37,14 @@ def _p(*parts):
 
 
 # --- Known emulator save locations -------------------------------------------
-# Each entry: display name + a list of candidate paths (native install and the
-# Flatpak layout used by EmuDeck). We keep the FIRST existing candidate.
+# Each entry: display name + candidate paths (native install and the Flatpak
+# layout used by EmuDeck). Every existing candidate becomes its own entry.
 EMULATORS = [
     ("RetroArch", [
         ".config/retroarch/saves",
         ".config/retroarch/states",
         ".var/app/org.libretro.RetroArch/config/retroarch/saves",
         ".var/app/org.libretro.RetroArch/config/retroarch/states",
-        "Emulation/saves/retroarch",
     ]),
     ("Dolphin (GC/Wii)", [
         ".local/share/dolphin-emu/GC",
@@ -49,6 +56,7 @@ EMULATORS = [
         ".config/PCSX2/memcards",
         ".config/PCSX2/sstates",
         ".var/app/net.pcsx2.PCSX2/config/PCSX2/memcards",
+        ".var/app/net.pcsx2.PCSX2/config/PCSX2/sstates",
     ]),
     ("RPCS3 (PS3)", [
         ".config/rpcs3/dev_hdd0/home/00000001/savedata",
@@ -64,6 +72,7 @@ EMULATORS = [
     ]),
     ("DuckStation (PS1)", [
         ".local/share/duckstation/memcards",
+        ".local/share/duckstation/savestates",
         ".var/app/org.duckstation.DuckStation/data/duckstation/memcards",
     ]),
     ("melonDS (DS)", [
@@ -78,17 +87,32 @@ EMULATORS = [
         ".local/share/flycast",
         ".var/app/org.flycast.Flycast/data/flycast",
     ]),
-    ("EmuDeck saves", [
+    ("Cemu (Wii U)", [
+        ".local/share/Cemu/mlc01/usr/save",
+        ".var/app/info.cemu.Cemu/data/Cemu/mlc01/usr/save",
+    ]),
+    ("Xemu (Xbox)", [
+        ".local/share/xemu/xemu",
+        ".var/app/app.xemu.xemu/data/xemu/xemu",
+    ]),
+    ("Vita3K (PS Vita)", [
+        ".local/share/Vita3K/Vita3K/ux0/user",
+    ]),
+    ("EmuDeck (central saves)", [
         "Emulation/saves",
-        "Emulation/storage",
     ]),
 ]
 
-# Sub-folders inside a Proton prefix that typically hold saves.
-PROTON_SAVE_HINTS = [
+# Proton prefix hints.
+# STRONG: every child folder is a plausible save -> yellow.
+# WEAK:   only children that look save-related (name contains "save") -> yellow,
+#         otherwise we'd flood the list with config/telemetry folders.
+STRONG_HINTS = [
     "drive_c/users/steamuser/Documents/My Games",
-    "drive_c/users/steamuser/Documents/SavedGames",
     "drive_c/users/steamuser/Saved Games",
+    "drive_c/users/steamuser/Documents/SavedGames",
+]
+WEAK_HINTS = [
     "drive_c/users/steamuser/AppData/Roaming",
     "drive_c/users/steamuser/AppData/LocalLow",
     "drive_c/users/steamuser/AppData/Local",
@@ -100,15 +124,17 @@ STEAM_COMPATDATA = [
     ".steam/steam/steamapps/compatdata",
 ]
 
-# Folders we never treat as game saves (noise inside AppData/Documents).
+# Folders that are never game saves (noise inside AppData / Documents).
 PROTON_BLOCKLIST = {
-    "Microsoft", "Temp", "Packages", "ConnectedDevicesPlatform",
-    "CrashDumps", "D3DSCache", "NVIDIA", "Steam", "vfleet", "Google",
+    "Microsoft", "Temp", "Packages", "ConnectedDevicesPlatform", "CrashDumps",
+    "D3DSCache", "NVIDIA", "NVIDIA Corporation", "Steam", "Google", "Mozilla",
+    "Adobe", "Intel", "AMD", "Valve", "wineboot", "Programs", "Comms",
+    "IsolatedStorage", "History", "Application Data", "GameBarPresenceWriter",
 }
 
 
-def _stat_folder(path, max_files=20000):
-    """Return (file_count, total_bytes, newest_mtime) for a folder tree."""
+def _stat_folder(path, max_files=MAX_FILES_PER_ENTRY):
+    """Return (file_count, total_bytes, newest_mtime, truncated)."""
     count = 0
     total = 0
     newest = 0.0
@@ -116,7 +142,7 @@ def _stat_folder(path, max_files=20000):
         for f in files:
             fp = os.path.join(root, f)
             try:
-                st = os.stat(fp)
+                st = os.lstat(fp)
             except OSError:
                 continue
             count += 1
@@ -124,20 +150,19 @@ def _stat_folder(path, max_files=20000):
             if st.st_mtime > newest:
                 newest = st.st_mtime
             if count >= max_files:
-                return count, total, newest
-    return count, total, newest
+                return count, total, newest, True
+    return count, total, newest, False
 
 
 def _make_id(source, path):
-    h = hashlib.sha1(f"{source}:{path}".encode("utf-8")).hexdigest()[:12]
-    return h
+    return hashlib.sha1(f"{source}:{path}".encode("utf-8")).hexdigest()[:12]
 
 
-def _entry(name, source, path, status):
-    count, size, newest = (0, 0, 0.0)
-    if os.path.isdir(path):
-        count, size, newest = _stat_folder(path)
-    # A known path that exists but is empty -> red (game never saved yet).
+def _entry(name, source, path, status, stats=None):
+    if stats is None:
+        stats = _stat_folder(path) if os.path.isdir(path) else (0, 0, 0.0, False)
+    count, size, newest, truncated = stats
+    # A known location that exists but is empty -> the game simply never saved.
     if status == "green" and count == 0:
         status = "red"
     return {
@@ -149,45 +174,60 @@ def _entry(name, source, path, status):
         "file_count": count,
         "size_bytes": size,
         "last_modified": newest,
+        "truncated": truncated,
     }
+
+
+def _looks_like_save(path, name):
+    """Cheap heuristic for WEAK hints: the folder or one of its immediate
+    children mentions 'save'."""
+    if "save" in name.lower():
+        return True
+    try:
+        for child in os.listdir(path)[:60]:
+            if "save" in child.lower():
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def scan_emulators():
     out = []
-    seen = set()
     for name, candidates in EMULATORS:
         for rel in candidates:
             path = _p(rel)
             if not os.path.isdir(path):
                 continue
-            if path in seen:
-                continue
-            seen.add(path)
-            label = name if rel.split("/")[-1] not in ("saves", "states", "memcards") \
-                else f"{name} · {rel.split('/')[-1]}"
+            leaf = os.path.basename(rel)
+            # Only append the leaf when it adds information (saves vs states).
+            label = name if leaf.lower() in name.lower() else f"{name} · {leaf}"
             out.append(_entry(label, "emulator", path, "green"))
     return out
 
 
-def scan_proton(min_age_days=None, recent_days=365):
-    """Heuristic: look inside each Proton prefix for save-like folders that were
-    modified recently. Returns YELLOW entries (need user confirmation)."""
+def scan_proton():
+    """Heuristic pass over Proton prefixes -> YELLOW entries (need confirming)."""
     out = []
     seen = set()
-    cutoff = time.time() - recent_days * 86400
+    cutoff = time.time() - PROTON_RECENT_DAYS * 86400
+
     for base_rel in STEAM_COMPATDATA:
         base = _p(base_rel)
         if not os.path.isdir(base):
             continue
         try:
-            appids = os.listdir(base)
+            appids = sorted(os.listdir(base))
         except OSError:
             continue
         for appid in appids:
+            if len(out) >= MAX_PROTON_CANDIDATES:
+                return out
             pfx = os.path.join(base, appid, "pfx")
             if not os.path.isdir(pfx):
                 continue
-            for hint in PROTON_SAVE_HINTS:
+            for hint, strong in [(h, True) for h in STRONG_HINTS] + \
+                                [(h, False) for h in WEAK_HINTS]:
                 hint_path = os.path.join(pfx, hint)
                 if not os.path.isdir(hint_path):
                     continue
@@ -196,23 +236,32 @@ def scan_proton(min_age_days=None, recent_days=365):
                 except OSError:
                     continue
                 for child in children:
-                    if child in PROTON_BLOCKLIST:
+                    if child in PROTON_BLOCKLIST or child.startswith("."):
                         continue
                     cpath = os.path.join(hint_path, child)
-                    if not os.path.isdir(cpath) or cpath in seen:
+                    if cpath in seen or not os.path.isdir(cpath):
                         continue
-                    count, size, newest = _stat_folder(cpath, max_files=2000)
-                    if count == 0 or newest < cutoff:
+                    if not strong and not _looks_like_save(cpath, child):
+                        continue
+                    # Cheap pre-filter on the folder's own mtime before walking.
+                    try:
+                        if os.stat(cpath).st_mtime < cutoff:
+                            continue
+                    except OSError:
+                        continue
+                    stats = _stat_folder(cpath, max_files=2000)
+                    if stats[0] == 0 or stats[2] < cutoff:
                         continue
                     seen.add(cpath)
-                    name = f"{child} (Proton #{appid})"
-                    e = _entry(name, "proton", cpath, "yellow")
-                    out.append(e)
+                    out.append(_entry(f"{child} (Proton {appid})", "proton",
+                                      cpath, "yellow", stats))
+                    if len(out) >= MAX_PROTON_CANDIDATES:
+                        return out
     return out
 
 
 def scan_watched(watched_paths):
-    """User-added folders. Always GREEN (they confirmed it)."""
+    """User-added folders. Always GREEN (the user confirmed them)."""
     out = []
     for path in watched_paths:
         path = os.path.expanduser(path)
@@ -221,13 +270,34 @@ def scan_watched(watched_paths):
     return out
 
 
+def _drop_nested(entries):
+    """Remove entries whose path lives inside another entry's path, so the same
+    files are never archived twice (e.g. EmuDeck's central saves folder vs the
+    per-emulator folders it contains)."""
+    kept = []
+    paths = sorted(entries, key=lambda e: len(e["path"]))
+    for e in paths:
+        p = os.path.normpath(e["path"])
+        if any(p.startswith(os.path.normpath(k["path"]) + os.sep) for k in kept):
+            continue
+        kept.append(e)
+    # Preserve caller-facing ordering separately.
+    kept_ids = {e["id"] for e in kept}
+    return [e for e in entries if e["id"] in kept_ids]
+
+
 def full_scan(watched_paths=None):
-    watched_paths = watched_paths or []
     entries = []
     entries.extend(scan_emulators())
     entries.extend(scan_proton())
-    entries.extend(scan_watched(watched_paths))
-    # Sort: green first, then yellow, then red; by newest activity inside group.
+    entries.extend(scan_watched(watched_paths or []))
+
+    # De-duplicate identical paths, then drop nested ones.
+    unique = {}
+    for e in entries:
+        unique.setdefault(e["id"], e)
+    entries = _drop_nested(list(unique.values()))
+
     order = {"green": 0, "yellow": 1, "red": 2}
     entries.sort(key=lambda e: (order.get(e["status"], 9), -e["last_modified"]))
     return entries

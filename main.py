@@ -7,17 +7,39 @@ GitHub repo (one tar.gz per game, versioned by git history).
 """
 
 import os
+import json
+import time
+
 import decky  # provided by Decky Loader at runtime
 
 import detector
 import github_store as gh
 from swp_settings import Settings
 
+SCAN_TTL = 20.0  # seconds a scan result stays usable (toggling must not rescan)
+
+
+def _target_ids():
+    """uid/gid of the Steam user, so files restored while running as root stay
+    writable by the game."""
+    if os.geteuid() != 0:
+        return None, None
+    user = os.environ.get("DECKY_USER")
+    if not user:
+        return None, None
+    try:
+        import pwd
+        pw = pwd.getpwnam(user)
+        return pw.pw_uid, pw.pw_gid
+    except Exception:
+        return None, None
+
 
 class Plugin:
     async def _main(self):
         self.settings = Settings()
-        self._device = None  # in-flight device-flow state
+        self._device = None       # in-flight device-flow state
+        self._scan_cache = None   # (timestamp, entries)
         decky.logger.info("SaveWaypoint loaded")
 
     async def _unload(self):
@@ -25,6 +47,17 @@ class Plugin:
 
     async def _uninstall(self):
         pass
+
+    # --- internals ---------------------------------------------------------
+    def _entries(self, force=False):
+        """Cached scan. A full scan walks every Proton prefix, so it must not run
+        again just because the user ticked a checkbox."""
+        now = time.time()
+        if not force and self._scan_cache and now - self._scan_cache[0] < SCAN_TTL:
+            return self._scan_cache[1]
+        entries = detector.full_scan(self.settings.get("watched"))
+        self._scan_cache = (now, entries)
+        return entries
 
     # --- Status ------------------------------------------------------------
     async def get_status(self):
@@ -83,34 +116,42 @@ class Plugin:
         except gh.GitHubError as e:
             return {"state": "error", "error": str(e)}
         if state == "ok":
-            token = payload
             try:
-                user = gh.get_user(token)
+                user = gh.get_user(payload)
             except gh.GitHubError as e:
                 return {"state": "error", "error": str(e)}
-            self.settings.set("token", token)
+            self.settings.set("token", payload)
             self.settings.set("login", user["login"])
             self._device = None
             return {"state": "ok", "login": user["login"]}
+        if state in ("expired", "denied", "error"):
+            self._device = None
+            return {"state": "error", "error": payload}
         return {"state": state}
+
+    async def login_cancel(self):
+        self._device = None
+        return {"ok": True}
 
     async def disconnect(self):
         self.settings.clear_auth()
         return {"ok": True}
 
     # --- Detection ---------------------------------------------------------
-    async def scan(self):
-        entries = detector.full_scan(self.settings.get("watched"))
+    async def scan(self, force: bool = True):
+        try:
+            entries = self._entries(force=force)
+        except Exception as e:
+            decky.logger.exception("scan failed")
+            return {"ok": False, "error": str(e)}
         selected = set(self.settings.get("selected"))
-        for e in entries:
-            e["selected"] = e["id"] in selected
-        return {"ok": True, "entries": entries}
+        out = [dict(e, selected=e["id"] in selected) for e in entries]
+        return {"ok": True, "entries": out}
 
     async def set_selection(self, ids):
-        # Persist selection + remember each selected entry's path for restore.
-        self.settings.set("selected", list(ids))
-        entries = detector.full_scan(self.settings.get("watched"))
-        by_id = {e["id"]: e for e in entries}
+        ids = list(ids or [])
+        self.settings.set("selected", ids)
+        by_id = {e["id"]: e for e in self._entries()}
         for eid in ids:
             if eid in by_id:
                 self.settings.remember_path(by_id[eid])
@@ -125,33 +166,29 @@ class Plugin:
         if path not in watched:
             watched.append(path)
             self.settings.set("watched", watched)
+            self._scan_cache = None
         return {"ok": True}
 
     async def remove_watched(self, path: str):
-        watched = [w for w in self.settings.get("watched") if w != path]
-        self.settings.set("watched", watched)
+        self.settings.set("watched",
+                          [w for w in self.settings.get("watched") if w != path])
+        self._scan_cache = None
         return {"ok": True}
 
     # --- Backup / restore --------------------------------------------------
-    async def _repo(self):
-        token = self.settings.get("token")
-        owner = self.settings.get("login")
-        repo = self.settings.get("repo")
-        gh.ensure_repo(token, owner, repo, private=True)
-        return token, owner, repo
-
     async def backup(self, ids=None):
         s = self.settings
         if not s.is_connected():
             return {"ok": False, "error": "not connected"}
-        ids = ids if ids is not None else s.get("selected")
+        ids = list(ids) if ids else s.get("selected")
         if not ids:
             return {"ok": False, "error": "nothing selected"}
         try:
-            token, owner, repo = await self._repo()
+            gh.ensure_repo(s.get("token"), s.get("login"), s.get("repo"), private=True)
         except gh.GitHubError as e:
             return {"ok": False, "error": str(e)}
 
+        token, owner, repo = s.get("token"), s.get("login"), s.get("repo")
         results = []
         paths = s.get("paths")
         for eid in ids:
@@ -163,13 +200,22 @@ class Plugin:
                 blob = gh.make_archive_bytes(info["path"])
                 gh.put_file(token, owner, repo, f"saves/{eid}/backup.tar.gz",
                             blob, f"backup: {info['name']}")
-                meta = f'{{"name": {info["name"]!r}, "path": {info["path"]!r}, "source": {info.get("source","")!r}}}'
+                meta = json.dumps({
+                    "name": info["name"],
+                    "path": info["path"],
+                    "source": info.get("source", ""),
+                    "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }, indent=2).encode("utf-8")
                 gh.put_file(token, owner, repo, f"saves/{eid}/meta.json",
-                            meta.encode("utf-8"), f"meta: {info['name']}")
+                            meta, f"meta: {info['name']}")
                 results.append({"id": eid, "ok": True, "name": info["name"],
                                 "size": len(blob)})
             except gh.GitHubError as e:
-                results.append({"id": eid, "ok": False, "error": str(e)})
+                results.append({"id": eid, "ok": False,
+                                "name": info["name"], "error": str(e)})
+            except OSError as e:
+                results.append({"id": eid, "ok": False,
+                                "name": info["name"], "error": f"read error: {e}"})
         ok = sum(1 for r in results if r["ok"])
         return {"ok": True, "count": ok, "total": len(results), "results": results}
 
@@ -179,25 +225,29 @@ class Plugin:
             return {"ok": False, "error": "not connected"}
         token, owner, repo = s.get("token"), s.get("login"), s.get("repo")
         try:
-            raw = gh.get_file(token, owner, repo, f"saves/{entry_id}/backup.tar.gz", ref=ref)
+            raw = gh.get_file(token, owner, repo,
+                              f"saves/{entry_id}/backup.tar.gz", ref=ref)
         except gh.GitHubError as e:
             return {"ok": False, "error": str(e)}
         if raw is None:
-            return {"ok": False, "error": "no backup in cloud for this game"}
+            return {"ok": False, "error": "no backup in the cloud for this game"}
+
         info = s.get("paths").get(entry_id)
         dest = info["path"] if info else None
         if not dest:
-            # Fall back to meta.json stored in the repo.
+            # Restoring on a fresh device: the repo's meta.json knows the path.
             try:
-                meta_raw = gh.get_file(token, owner, repo, f"saves/{entry_id}/meta.json", ref=ref)
-                import json as _json
-                dest = _json.loads(meta_raw.decode("utf-8"))["path"]
+                meta_raw = gh.get_file(token, owner, repo,
+                                       f"saves/{entry_id}/meta.json", ref=ref)
+                dest = json.loads(meta_raw.decode("utf-8"))["path"]
             except Exception:
                 return {"ok": False, "error": "unknown restore path"}
         try:
             gh.extract_archive_bytes(raw, dest)
-        except gh.GitHubError as e:
+            gh.chown_tree(dest, *_target_ids())
+        except (gh.GitHubError, OSError) as e:
             return {"ok": False, "error": str(e)}
+        self._scan_cache = None
         return {"ok": True, "path": dest}
 
     async def history(self, entry_id: str):
@@ -209,12 +259,11 @@ class Plugin:
         return {"ok": True, "commits": commits}
 
     async def test_entry(self, entry_id: str):
-        """Dry-run: confirm the save can be read & archived, and restore target
-        is writable. Powers the UI 'Test this save' button."""
+        """Dry-run: confirm the save can be read and archived, and that its folder
+        is writable so a restore would succeed. Powers the UI 'Test' button."""
         info = self.settings.get("paths").get(entry_id)
         if not info:
-            entries = detector.full_scan(self.settings.get("watched"))
-            info = next((e for e in entries if e["id"] == entry_id), None)
+            info = next((e for e in self._entries() if e["id"] == entry_id), None)
         if not info:
             return {"ok": False, "error": "entry not found"}
         path = info["path"]
@@ -222,11 +271,15 @@ class Plugin:
             return {"ok": False, "error": "folder missing"}
         try:
             blob = gh.make_archive_bytes(path)
-        except Exception as e:
+        except (gh.GitHubError, OSError) as e:
             return {"ok": False, "error": f"cannot archive: {e}"}
-        writable = os.access(path, os.W_OK)
-        return {"ok": True, "readable": True, "restorable": writable,
-                "archive_size": len(blob)}
+        return {
+            "ok": True,
+            "readable": True,
+            "restorable": os.access(path, os.W_OK),
+            "archive_size": len(blob),
+            "warn_large": len(blob) > gh.SOFT_LIMIT,
+        }
 
     async def set_auto_backup(self, enabled: bool):
         self.settings.set("auto_backup", bool(enabled))

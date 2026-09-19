@@ -1,14 +1,17 @@
 import {
   ButtonItem,
+  ConfirmModal,
+  DialogButton,
+  Focusable,
   PanelSection,
   PanelSectionRow,
-  ToggleField,
   TextField,
-  Focusable,
+  ToggleField,
+  showModal,
   staticClasses,
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FaMapPin } from "react-icons/fa";
 
 // --- Backend bindings --------------------------------------------------------
@@ -16,8 +19,9 @@ const getStatus = callable<[], any>("get_status");
 const setClientId = callable<[string], any>("set_client_id");
 const loginStart = callable<[], any>("login_start");
 const loginPoll = callable<[], any>("login_poll");
+const loginCancel = callable<[], any>("login_cancel");
 const disconnect = callable<[], any>("disconnect");
-const scan = callable<[], any>("scan");
+const scan = callable<[boolean], any>("scan");
 const setSelection = callable<[string[]], any>("set_selection");
 const backup = callable<[string[] | null], any>("backup");
 const restore = callable<[string, string | null], any>("restore");
@@ -33,8 +37,13 @@ type Entry = {
   selected: boolean;
 };
 
-const statusDot = (s: string) =>
-  s === "green" ? "🟢" : s === "yellow" ? "🟡" : "🔴";
+const DOT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
+
+const HINT: Record<string, string> = {
+  green: "detected",
+  yellow: "probable — confirm before syncing",
+  red: "nothing saved yet",
+};
 
 const humanSize = (b: number) => {
   if (!b) return "0 B";
@@ -48,20 +57,51 @@ const humanSize = (b: number) => {
   return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 };
 
+const toast = (title: string, body: string) => toaster.toast({ title, body });
+
 function Content() {
   const [status, setStatus] = useState<any>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [clientId, setCid] = useState("");
   const [device, setDevice] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [scanned, setScanned] = useState(false);
+  const scanning = useRef(false);
 
-  const refresh = async () => setStatus(await getStatus());
+  const refresh = async () => {
+    const s = await getStatus();
+    setStatus(s);
+    return s;
+  };
 
+  const doScan = async (force = true) => {
+    if (scanning.current) return;
+    scanning.current = true;
+    setBusy(true);
+    try {
+      const r = await scan(force);
+      if (r.ok) {
+        setEntries(r.entries);
+        setScanned(true);
+      } else {
+        toast("SaveWaypoint", `Scan failed: ${r.error}`);
+      }
+    } finally {
+      scanning.current = false;
+      setBusy(false);
+    }
+  };
+
+  // First load: fetch status and, when already connected, scan straight away so
+  // the user lands on a populated list instead of an empty panel.
   useEffect(() => {
-    refresh();
+    (async () => {
+      const s = await refresh();
+      if (s?.connected) doScan(false);
+    })();
   }, []);
 
-  // Poll the device-flow login until approved.
+  // Poll the device-flow login until the user approves it on their phone.
   useEffect(() => {
     if (!device) return;
     const iv = setInterval(async () => {
@@ -69,12 +109,13 @@ function Content() {
       if (r.state === "ok") {
         clearInterval(iv);
         setDevice(null);
-        toaster.toast({ title: "SaveWaypoint", body: `Connected as ${r.login}` });
-        refresh();
+        toast("SaveWaypoint", `Connected as ${r.login}`);
+        await refresh();
+        doScan(true);
       } else if (r.state === "error") {
         clearInterval(iv);
         setDevice(null);
-        toaster.toast({ title: "SaveWaypoint", body: `Login error: ${r.error}` });
+        toast("SaveWaypoint", `Login failed: ${r.error}`);
       }
     }, (device.interval || 5) * 1000);
     return () => clearInterval(iv);
@@ -84,17 +125,10 @@ function Content() {
     if (clientId.trim()) await setClientId(clientId.trim());
     const r = await loginStart();
     if (!r.ok) {
-      toaster.toast({ title: "SaveWaypoint", body: r.error });
+      toast("SaveWaypoint", r.error);
       return;
     }
     setDevice(r);
-  };
-
-  const doScan = async () => {
-    setBusy(true);
-    const r = await scan();
-    setBusy(false);
-    if (r.ok) setEntries(r.entries);
   };
 
   const toggle = async (id: string, on: boolean) => {
@@ -107,122 +141,178 @@ function Content() {
     setBusy(true);
     const r = await backup(null);
     setBusy(false);
-    toaster.toast({
-      title: "SaveWaypoint",
-      body: r.ok ? `Backed up ${r.count}/${r.total} game(s)` : `Error: ${r.error}`,
-    });
+    if (!r.ok) {
+      toast("SaveWaypoint", `Error: ${r.error}`);
+      return;
+    }
+    const failed = (r.results || []).filter((x: any) => !x.ok);
+    toast(
+      "SaveWaypoint",
+      failed.length
+        ? `Backed up ${r.count}/${r.total} — failed: ${failed
+            .map((f: any) => f.name || f.id)
+            .join(", ")}`
+        : `Backed up ${r.count}/${r.total} game(s)`
+    );
   };
 
-  const doRestore = async (e: Entry) => {
-    setBusy(true);
-    const r = await restore(e.id, null);
-    setBusy(false);
-    toaster.toast({
-      title: "SaveWaypoint",
-      body: r.ok ? `Restored ${e.name}` : `Error: ${r.error}`,
-    });
+  // Restoring overwrites the local save, so always confirm first.
+  const doRestore = (e: Entry) => {
+    showModal(
+      <ConfirmModal
+        strTitle={`Restore ${e.name}?`}
+        strDescription={
+          "This overwrites the save files currently on this device with the " +
+          "version stored in your GitHub repo. This cannot be undone."
+        }
+        strOKButtonText="Restore"
+        onOK={async () => {
+          setBusy(true);
+          const r = await restore(e.id, null);
+          setBusy(false);
+          toast("SaveWaypoint", r.ok ? `Restored ${e.name}` : `Error: ${r.error}`);
+          if (r.ok) doScan(true);
+        }}
+      />
+    );
   };
 
   const doTest = async (e: Entry) => {
     const r = await testEntry(e.id);
-    toaster.toast({
-      title: e.name,
-      body: r.ok
-        ? `✅ readable · ${r.restorable ? "restorable" : "read-only!"} · ${humanSize(r.archive_size)}`
-        : `⚠️ ${r.error}`,
-    });
+    if (!r.ok) {
+      toast(e.name, `⚠️ ${r.error}`);
+      return;
+    }
+    const parts = [
+      "✅ readable",
+      r.restorable ? "restorable" : "⚠️ folder is read-only",
+      humanSize(r.archive_size),
+    ];
+    if (r.warn_large) parts.push("⚠️ large");
+    toast(e.name, parts.join(" · "));
   };
 
-  // --- Not connected: setup + device flow -----------------------------------
-  if (!status) {
-    return <PanelSection title="SaveWaypoint">Loading…</PanelSection>;
-  }
+  if (!status) return <PanelSection title="SaveWaypoint">Loading…</PanelSection>;
 
+  // --- Not connected: setup + device flow -----------------------------------
   if (!status.connected) {
+    if (device) {
+      return (
+        <PanelSection title="Connect GitHub">
+          <PanelSectionRow>
+            On your phone, open <b>{device.verification_uri}</b> and enter this code:
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <div
+              style={{
+                fontSize: "2em",
+                fontWeight: "bold",
+                letterSpacing: "4px",
+                textAlign: "center",
+                padding: "8px 0",
+              }}
+            >
+              {device.user_code}
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>Waiting for approval…</PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={async () => {
+                await loginCancel();
+                setDevice(null);
+              }}
+            >
+              Cancel
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      );
+    }
     return (
       <PanelSection title="Connect GitHub">
-        {device ? (
-          <>
-            <PanelSectionRow>
-              On your phone, open <b>{device.verification_uri}</b> and enter:
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <div style={{ fontSize: "2em", fontWeight: "bold", letterSpacing: "3px", textAlign: "center" }}>
-                {device.user_code}
-              </div>
-            </PanelSectionRow>
-            <PanelSectionRow>Waiting for approval…</PanelSectionRow>
-          </>
-        ) : (
-          <>
-            {!status.has_client_id && (
-              <PanelSectionRow>
-                <TextField
-                  label="GitHub OAuth Client ID"
-                  value={clientId}
-                  onChange={(e) => setCid(e.target.value)}
-                />
-              </PanelSectionRow>
-            )}
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={doConnect}>
-                Connect GitHub
-              </ButtonItem>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <span style={{ fontSize: "0.8em", opacity: 0.7 }}>
-                Saves go to a private repo on your own account. See README to create
-                the one-time OAuth App Client ID.
-              </span>
-            </PanelSectionRow>
-          </>
+        {!status.has_client_id && (
+          <PanelSectionRow>
+            <TextField
+              label="GitHub OAuth Client ID"
+              value={clientId}
+              onChange={(e) => setCid(e.target.value)}
+            />
+          </PanelSectionRow>
         )}
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={doConnect}>
+            Connect GitHub
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <span style={{ fontSize: "0.8em", opacity: 0.7 }}>
+            Your saves go to a private repo on your own account. See the README to
+            create the one-time OAuth App Client ID.
+          </span>
+        </PanelSectionRow>
       </PanelSection>
     );
   }
 
   // --- Connected: main UI ----------------------------------------------------
-  const selectedCount = entries.filter((e) => e.selected).length;
+  const selected = entries.filter((e) => e.selected);
   return (
     <>
       <PanelSection title={`Connected · ${status.login}`}>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={doScan} disabled={busy}>
-            {busy ? "Scanning…" : "Scan for saves"}
+          <ButtonItem layout="below" onClick={() => doScan(true)} disabled={busy}>
+            {busy ? "Working…" : "Rescan for saves"}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={doBackup} disabled={busy || selectedCount === 0}>
-            {`Back up now (${selectedCount})`}
+          <ButtonItem
+            layout="below"
+            onClick={doBackup}
+            disabled={busy || selected.length === 0}
+          >
+            {`Back up now (${selected.length})`}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
 
-      {entries.length > 0 && (
-        <PanelSection title="Detected saves">
-          {entries.map((e) => (
-            <PanelSectionRow key={e.id}>
-              <Focusable style={{ display: "flex", flexDirection: "column", width: "100%" }}>
-                <ToggleField
-                  label={`${statusDot(e.status)} ${e.name}`}
-                  description={`${e.source} · ${e.file_count} files · ${humanSize(e.size_bytes)}`}
-                  checked={e.selected}
-                  disabled={e.status === "red"}
-                  onChange={(v) => toggle(e.id, v)}
-                />
-                <div style={{ display: "flex", gap: "6px" }}>
-                  <ButtonItem layout="below" onClick={() => doTest(e)}>
-                    Test
-                  </ButtonItem>
-                  <ButtonItem layout="below" onClick={() => doRestore(e)}>
-                    Restore
-                  </ButtonItem>
-                </div>
+      <PanelSection title="Detected saves">
+        {entries.length === 0 && (
+          <PanelSectionRow>
+            {scanned
+              ? "Nothing found yet. Launch a game, save once, then rescan."
+              : "Scanning…"}
+          </PanelSectionRow>
+        )}
+        {entries.map((e) => (
+          <PanelSectionRow key={e.id}>
+            <Focusable style={{ display: "flex", flexDirection: "column", width: "100%" }}>
+              <ToggleField
+                label={`${DOT[e.status]} ${e.name}`}
+                description={`${HINT[e.status]} · ${e.file_count} files · ${humanSize(
+                  e.size_bytes
+                )}`}
+                checked={e.selected}
+                disabled={e.status === "red"}
+                onChange={(v) => toggle(e.id, v)}
+              />
+              <Focusable style={{ display: "flex", gap: "8px", paddingBottom: "8px" }}>
+                <DialogButton style={{ flex: 1 }} onClick={() => doTest(e)}>
+                  Test
+                </DialogButton>
+                <DialogButton
+                  style={{ flex: 1 }}
+                  disabled={busy}
+                  onClick={() => doRestore(e)}
+                >
+                  Restore
+                </DialogButton>
               </Focusable>
-            </PanelSectionRow>
-          ))}
-        </PanelSection>
-      )}
+            </Focusable>
+          </PanelSectionRow>
+        ))}
+      </PanelSection>
 
       <PanelSection title="Account">
         <PanelSectionRow>
@@ -230,6 +320,8 @@ function Content() {
             layout="below"
             onClick={async () => {
               await disconnect();
+              setEntries([]);
+              setScanned(false);
               refresh();
             }}
           >
