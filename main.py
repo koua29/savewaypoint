@@ -22,6 +22,20 @@ SCAN_TTL = 20.0  # seconds a scan result stays usable (toggling must not rescan)
 CURRENT_VERSION = getattr(decky, "DECKY_PLUGIN_VERSION", "0.0.0")
 
 
+def _normalise_client_id(value):
+    """GitHub's current OAuth client IDs all begin with the literal prefix
+    'Ov23li'. Typing that on a touch keyboard invites O/0 and l/I/1 mix-ups, and
+    GitHub then answers a flat 'Not Found'. Only the fixed prefix is corrected -
+    the random part is left exactly as typed."""
+    prefix = "Ov23li"
+    head, tail = value[:len(prefix)], value[len(prefix):]
+    canon = {"0": "o", "1": "l", "i": "l", "|": "l"}
+    folded = "".join(canon.get(c.lower(), c.lower()) for c in head)
+    if folded == "".join(canon.get(c.lower(), c.lower()) for c in prefix):
+        return prefix + tail
+    return value
+
+
 def _client_id_problem(value):
     """A GitHub OAuth App Client ID is a generated token ('Ov23li...' on newer
     apps, 20 hex chars on older ones) - not the account name, which is the most
@@ -94,12 +108,13 @@ class Plugin:
         }
 
     async def set_client_id(self, client_id: str):
-        client_id = (client_id or "").strip()
-        problem = _client_id_problem(client_id)
+        raw = (client_id or "").strip()
+        problem = _client_id_problem(raw)
         if problem:
             return {"ok": False, "error": problem}
-        self.settings.set("client_id", client_id)
-        return {"ok": True}
+        fixed = _normalise_client_id(raw)
+        self.settings.set("client_id", fixed)
+        return {"ok": True, "corrected": fixed != raw, "client_id": fixed}
 
     async def clear_client_id(self):
         self.settings.set("client_id", "")

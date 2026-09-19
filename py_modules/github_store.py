@@ -127,8 +127,9 @@ _DEVICE_START_ERRORS = {
         "this OAuth App is not allowed to use Device Flow - tick 'Enable Device "
         "Flow' on its GitHub settings page.",
     "Not Found":
-        "GitHub does not know this Client ID. Copy it again from "
-        "github.com/settings/developers (it is not your username).",
+        "GitHub does not know this Client ID. Check the lookalike characters: it "
+        "starts with a capital letter O (not a zero) and 'Ov23li' ends in a "
+        "lowercase L. Copy it again from github.com/settings/developers.",
     "incorrect_client_credentials":
         "GitHub rejected this Client ID - copy it again from the OAuth App page.",
 }
