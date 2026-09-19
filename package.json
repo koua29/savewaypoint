@@ -1,6 +1,6 @@
 {
   "name": "savewaypoint",
-  "version": "0.2.0-beta.13",
+  "version": "0.2.0",
   "description": "Auto-detect and sync non-Steam game saves to your own private GitHub repo.",
   "type": "module",
   "scripts": {

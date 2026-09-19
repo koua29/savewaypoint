@@ -11,11 +11,15 @@ Steam Deck / SteamOS handhelds that **auto-detects your non-Steam game saves**
 (emulators, Proton games) and syncs them to **your own private GitHub repo** — so
 you can pick up your progress on another device.
 
-> ⚠️ **Status: early MVP, not yet tested on real hardware.** The frontend builds
-> clean, the backend passes its checks (archive round-trip, path-traversal
-> rejection, detection rules), but nothing has run on an actual Steam Deck yet.
-> Verify a full backup → restore cycle yourself before trusting it with a save
-> you care about.
+> **Status: backing up is proven on real hardware.** Sign-in, detection and backup
+> have run end to end on a Steam Deck, and the resulting archives were verified to
+> contain real `.sav` data.
+>
+> ⚠️ **Restoring has not been exercised on a device yet.** The code path is tested
+> (archive round-trip, path-traversal and symlink rejection, permission
+> handling), but no one has yet put a save back on a real console. Do a dry run —
+> back up, then restore the copy you just made — before relying on it for a save
+> you would hate to lose.
 
 ## Why
 
