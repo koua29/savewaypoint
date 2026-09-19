@@ -186,6 +186,8 @@ function Content() {
       } else {
         toast("SaveWaypoint", `Scan failed: ${r.error}`);
       }
+    } catch (e: any) {
+      toast("Scan failed", String(e?.message ?? e));
     } finally {
       scanning.current = false;
       setBusy(false);
@@ -196,23 +198,36 @@ function Content() {
   // the user lands on a populated list instead of an empty panel.
   useEffect(() => {
     (async () => {
-      const s = await refresh();
-      setVersion(await getVersion());
-      if (s?.connected) doScan(false);
-      setUpdate(await checkUpdate(false));
+      try {
+        const s = await refresh();
+        setVersion(await getVersion());
+        if (s?.connected) doScan(false);
+        const u = await checkUpdate(false);
+        setUpdate(u && !u.error ? u : null);
+      } catch (e) {
+        // A failing update check must not stop the panel from rendering.
+        console.error("[SaveWaypoint] startup", e);
+      }
     })();
   }, []);
 
   const doCheckUpdate = async (force = true) => {
     setBusy(true);
-    const u = await checkUpdate(force);
-    setBusy(false);
-    setUpdate(u);
-    if (!u) toast("SaveWaypoint", "Could not reach GitHub for updates");
-    else if (!u.available && !u.rollback)
-      // Naming the channel matters: "up to date" on stable while a newer beta
-      // exists is otherwise indistinguishable from a broken check.
-      toast("SaveWaypoint", `Up to date on the ${u.channel} channel`);
+    try {
+      const u = await checkUpdate(force);
+      setUpdate(u && !u.error ? u : null);
+      if (!u) toast("SaveWaypoint", "Could not reach GitHub for updates");
+      else if (u.error) toast("Update check failed", u.error);
+      else if (!u.available && !u.rollback)
+        // Naming the channel matters: "up to date" on stable while a newer beta
+        // exists is otherwise indistinguishable from a broken check.
+        toast("SaveWaypoint", `Up to date on the ${u.channel} channel`);
+    } catch (e: any) {
+      toast("Update check failed", String(e?.message ?? e));
+    } finally {
+      // Without this the button stays disabled forever on any failure.
+      setBusy(false);
+    }
   };
 
   const toggleBeta = async (on: boolean) => {
@@ -266,8 +281,15 @@ function Content() {
 
   const doBackup = async () => {
     setBusy(true);
-    const r = await backup(null);
-    setBusy(false);
+    let r: any;
+    try {
+      r = await backup(null);
+    } catch (e: any) {
+      toast("Backup failed", String(e?.message ?? e));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast("SaveWaypoint", `Error: ${r.error}`);
       return;
@@ -285,10 +307,15 @@ function Content() {
 
   const runRestore = async (e: Entry, ref: string | null) => {
     setBusy(true);
-    const r = await restore(e.id, ref);
-    setBusy(false);
-    toast("SaveWaypoint", r.ok ? `Restored ${e.name}` : `Error: ${r.error}`);
-    if (r.ok) doScan(true);
+    try {
+      const r = await restore(e.id, ref);
+      toast("SaveWaypoint", r.ok ? `Restored ${e.name}` : `Error: ${r.error}`);
+      if (r.ok) doScan(true);
+    } catch (err: any) {
+      toast("Restore failed", String(err?.message ?? err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Restoring overwrites the local save, so always confirm first.
@@ -308,8 +335,15 @@ function Content() {
 
   const doHistory = async (e: Entry) => {
     setBusy(true);
-    const r = await historyOf(e.id);
-    setBusy(false);
+    let r: any;
+    try {
+      r = await historyOf(e.id);
+    } catch (err: any) {
+      toast("History failed", String(err?.message ?? err));
+      return;
+    } finally {
+      setBusy(false);
+    }
     const commits: Commit[] = r?.commits ?? [];
     if (!r?.ok || commits.length === 0) {
       toast(e.name, r?.error ? `⚠️ ${r.error}` : "No backup history yet");

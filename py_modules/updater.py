@@ -42,7 +42,12 @@ def version_key(version):
 
 
 def latest_release(current, beta=False):
-    """Newest release on the chosen channel, compared with what is installed."""
+    """Newest release on the chosen channel, compared with what is installed.
+
+    Never raises: a read timeout during resp.read() surfaces as a bare
+    TimeoutError rather than a URLError, and anything escaping here would reject
+    the frontend's promise and leave its button stuck disabled. Failures come
+    back as an 'error' field instead."""
     try:
         if beta:
             releases = [r for r in json.loads(
@@ -54,9 +59,12 @@ def latest_release(current, beta=False):
         else:
             release = json.loads(
                 _http(f"https://api.github.com/repos/{REPO}/releases/latest"))
-    except (urllib.error.HTTPError, urllib.error.URLError, ValueError):
-        # No releases yet, or the repo is private / unreachable.
-        return None
+    except urllib.error.HTTPError as e:
+        return {"error": f"GitHub returned HTTP {e.code}", "channel":
+                "beta" if beta else "stable", "current": current}
+    except Exception as e:  # timeouts, TLS, DNS, malformed JSON
+        return {"error": f"{type(e).__name__}: {e}", "channel":
+                "beta" if beta else "stable", "current": current}
 
     asset = next((a for a in release.get("assets", [])
                   if a.get("name") == ZIP_NAME), {})

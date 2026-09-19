@@ -331,8 +331,21 @@ class Plugin:
         if (not force and self._update is not None
                 and now - self._update_checked < updater.UPDATE_INTERVAL):
             return self._update
-        result = await asyncio.to_thread(
-            updater.latest_release, CURRENT_VERSION, bool(self.settings.get("beta")))
-        self._update = result
-        self._update_checked = now
+        # Must not raise: an exception crossing back to the frontend rejects its
+        # promise, and the caller's button never leaves its disabled state.
+        try:
+            result = await asyncio.to_thread(
+                updater.latest_release, CURRENT_VERSION,
+                bool(self.settings.get("beta")))
+        except Exception as e:
+            decky.logger.exception("update check failed")
+            return {"error": f"{type(e).__name__}: {e}",
+                    "current": CURRENT_VERSION,
+                    "channel": "beta" if self.settings.get("beta") else "stable"}
+        if result and not result.get("error"):
+            self._update = result
+            self._update_checked = now
+        else:
+            decky.logger.warning("update check: %s",
+                                 (result or {}).get("error", "no result"))
         return result
