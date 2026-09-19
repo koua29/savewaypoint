@@ -10,9 +10,13 @@ import {
   showModal,
   staticClasses,
 } from "@decky/ui";
+import { Navigation } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
 import { FaMapPin } from "react-icons/fa";
+
+const PLUGIN_NAME = "SaveWaypoint";
+const INSTALL_TYPE_UPDATE = 1;
 
 // --- Backend bindings --------------------------------------------------------
 const getStatus = callable<[], any>("get_status");
@@ -26,6 +30,57 @@ const setSelection = callable<[string[]], any>("set_selection");
 const backup = callable<[string[] | null], any>("backup");
 const restore = callable<[string, string | null], any>("restore");
 const testEntry = callable<[string], any>("test_entry");
+const getVersion = callable<[], any>("get_version");
+const setBeta = callable<[boolean], any>("set_beta");
+const checkUpdate = callable<[boolean], any>("check_update");
+
+type Update = {
+  current: string;
+  latest: string;
+  available: boolean;
+  rollback: boolean;
+  prerelease: boolean;
+  channel: string;
+  title: string;
+  url: string;
+  zip_url: string;
+  zip_sha256: string;
+};
+
+function openWeb(url: string) {
+  Navigation.NavigateToExternalWeb(url);
+  Navigation.CloseSideMenus();
+}
+
+async function installUpdate(update: Update) {
+  // Same call Decky's own store uses: Decky prompts, verifies the zip's SHA-256
+  // and swaps the plugin files in.
+  const backend = (window as any).DeckyBackend;
+  if (!backend?.call) {
+    openWeb(update.url);
+    return;
+  }
+  await backend.call(
+    "utilities/install_plugin",
+    update.zip_url,
+    PLUGIN_NAME,
+    update.latest,
+    update.zip_sha256,
+    INSTALL_TYPE_UPDATE
+  );
+  // Decky writes the files but this panel is still running the old bundle, so
+  // ask the loader to import the new build before closing the menu.
+  const loader = (window as any).DeckyPluginLoader;
+  try {
+    await (loader?.importPlugin?.(PLUGIN_NAME, update.latest) ??
+      loader?.loadPlugin?.(PLUGIN_NAME) ??
+      Promise.resolve());
+  } catch (e) {
+    console.error("[SaveWaypoint] plugin reload failed", e);
+  }
+  toaster.toast({ title: "SaveWaypoint", body: `Updated to ${update.latest}` });
+  Navigation.CloseSideMenus();
+}
 
 type Entry = {
   id: string;
@@ -66,6 +121,8 @@ function Content() {
   const [device, setDevice] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [scanned, setScanned] = useState(false);
+  const [version, setVersion] = useState<any>(null);
+  const [update, setUpdate] = useState<Update | null>(null);
   const scanning = useRef(false);
 
   const refresh = async () => {
@@ -97,9 +154,26 @@ function Content() {
   useEffect(() => {
     (async () => {
       const s = await refresh();
+      setVersion(await getVersion());
       if (s?.connected) doScan(false);
+      setUpdate(await checkUpdate(false));
     })();
   }, []);
+
+  const doCheckUpdate = async (force = true) => {
+    setBusy(true);
+    const u = await checkUpdate(force);
+    setBusy(false);
+    setUpdate(u);
+    if (!u) toast("SaveWaypoint", "Could not reach GitHub for updates");
+    else if (!u.available && !u.rollback) toast("SaveWaypoint", "You're up to date");
+  };
+
+  const toggleBeta = async (on: boolean) => {
+    setVersion((v: any) => ({ ...v, beta: on }));
+    await setBeta(on);
+    doCheckUpdate(true);
+  };
 
   // Poll the device-flow login until the user approves it on their phone.
   useEffect(() => {
@@ -194,6 +268,55 @@ function Content() {
 
   if (!status) return <PanelSection title="SaveWaypoint">Loading…</PanelSection>;
 
+  // Shown on both the connected and the not-yet-connected screens, so an update
+  // is never gated behind signing in.
+  const updateSection = (
+    <PanelSection title="Version">
+      <PanelSectionRow>
+        <span style={{ fontSize: "0.9em", opacity: 0.8 }}>
+          {`v${version?.version ?? "?"}`}
+          {version?.beta ? " · beta channel" : ""}
+        </span>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ToggleField
+          label="Beta channel"
+          description="Receive pre-releases. Newer features, less tested."
+          checked={!!version?.beta}
+          onChange={toggleBeta}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" onClick={() => doCheckUpdate(true)} disabled={busy}>
+          Check for updates
+        </ButtonItem>
+      </PanelSectionRow>
+      {update && (update.available || update.rollback) && (
+        <>
+          <PanelSectionRow>
+            <div style={{ fontSize: "0.9em" }}>
+              {update.available
+                ? `Update available: ${update.latest}`
+                : `Go back to stable: ${update.latest}`}
+              {update.prerelease && " [beta]"}
+              {update.title && <div style={{ fontWeight: "bold" }}>{update.title}</div>}
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => installUpdate(update)}>
+              {update.available ? `Update to ${update.latest}` : `Install ${update.latest}`}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => openWeb(update.url)}>
+              View release notes
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
+    </PanelSection>
+  );
+
   // --- Not connected: setup + device flow -----------------------------------
   if (!status.connected) {
     if (device) {
@@ -231,28 +354,31 @@ function Content() {
       );
     }
     return (
-      <PanelSection title="Connect GitHub">
-        {!status.has_client_id && (
+      <>
+        <PanelSection title="Connect GitHub">
+          {!status.has_client_id && (
+            <PanelSectionRow>
+              <TextField
+                label="GitHub OAuth Client ID"
+                value={clientId}
+                onChange={(e) => setCid(e.target.value)}
+              />
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
-            <TextField
-              label="GitHub OAuth Client ID"
-              value={clientId}
-              onChange={(e) => setCid(e.target.value)}
-            />
+            <ButtonItem layout="below" onClick={doConnect}>
+              Connect GitHub
+            </ButtonItem>
           </PanelSectionRow>
-        )}
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={doConnect}>
-            Connect GitHub
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <span style={{ fontSize: "0.8em", opacity: 0.7 }}>
-            Your saves go to a private repo on your own account. See the README to
-            create the one-time OAuth App Client ID.
-          </span>
-        </PanelSectionRow>
-      </PanelSection>
+          <PanelSectionRow>
+            <span style={{ fontSize: "0.8em", opacity: 0.7 }}>
+              Your saves go to a private repo on your own account. See the README to
+              create the one-time OAuth App Client ID.
+            </span>
+          </PanelSectionRow>
+        </PanelSection>
+        {updateSection}
+      </>
     );
   }
 
@@ -329,6 +455,8 @@ function Content() {
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
+
+      {updateSection}
     </>
   );
 }

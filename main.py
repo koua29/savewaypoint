@@ -9,14 +9,17 @@ GitHub repo (one tar.gz per game, versioned by git history).
 import os
 import json
 import time
+import asyncio
 
 import decky  # provided by Decky Loader at runtime
 
 import detector
 import github_store as gh
+import updater
 from swp_settings import Settings
 
 SCAN_TTL = 20.0  # seconds a scan result stays usable (toggling must not rescan)
+CURRENT_VERSION = getattr(decky, "DECKY_PLUGIN_VERSION", "0.0.0")
 
 
 def _target_ids():
@@ -38,9 +41,11 @@ def _target_ids():
 class Plugin:
     async def _main(self):
         self.settings = Settings()
-        self._device = None       # in-flight device-flow state
-        self._scan_cache = None   # (timestamp, entries)
-        decky.logger.info("SaveWaypoint loaded")
+        self._device = None        # in-flight device-flow state
+        self._scan_cache = None    # (timestamp, entries)
+        self._update = None        # last update-check result
+        self._update_checked = 0.0
+        decky.logger.info("SaveWaypoint %s loaded", CURRENT_VERSION)
 
     async def _unload(self):
         decky.logger.info("SaveWaypoint unloaded")
@@ -284,3 +289,26 @@ class Plugin:
     async def set_auto_backup(self, enabled: bool):
         self.settings.set("auto_backup", bool(enabled))
         return {"ok": True}
+
+    # --- Release channel / updates -----------------------------------------
+    async def get_version(self):
+        return {"version": CURRENT_VERSION, "beta": bool(self.settings.get("beta"))}
+
+    async def set_beta(self, enabled: bool):
+        """Switch release channel. Forces the next check to hit GitHub so the
+        other channel's build shows up immediately."""
+        self.settings.set("beta", bool(enabled))
+        self._update = None
+        self._update_checked = 0.0
+        return {"ok": True}
+
+    async def check_update(self, force: bool = False):
+        now = time.time()
+        if (not force and self._update is not None
+                and now - self._update_checked < updater.UPDATE_INTERVAL):
+            return self._update
+        result = await asyncio.to_thread(
+            updater.latest_release, CURRENT_VERSION, bool(self.settings.get("beta")))
+        self._update = result
+        self._update_checked = now
+        return result

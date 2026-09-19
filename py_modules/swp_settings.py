@@ -19,6 +19,7 @@ DEFAULTS = {
     "paths": {},              # entry_id -> {"name","path","source"}
     "watched": [],            # user-added custom folders
     "auto_backup": False,
+    "beta": False,            # release channel: beta pre-releases or stable only
 }
 
 
