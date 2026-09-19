@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # annotated tag messages become the release titles
 
       - uses: pnpm/action-setup@v4
         with:
@@ -48,6 +50,15 @@ jobs:
 
       # A tag push publishes the zip so Decky can install it straight from the
       # release URL.
+      # Release title = the annotated tag's subject, e.g.
+      #   git tag -a v0.3.0 -m "v0.3.0 — Auto-backup on game close"
+      - name: Read tag subject
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: tag
+        run: |
+          subject=$(git for-each-ref --format='%(contents:subject)' "refs/tags/${GITHUB_REF_NAME}")
+          echo "subject=${subject:-$GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
       # The tag decides the channel: v1.2.3 is stable, v1.2.3-beta.N ships as a
       # pre-release so only users on the beta channel are offered it.
       - name: Publish release
@@ -55,6 +66,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release/SaveWaypoint.zip
+          name: ${{ steps.tag.outputs.subject }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') }}
           make_latest: ${{ !contains(github.ref_name, '-') }}

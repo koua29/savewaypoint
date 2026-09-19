@@ -57,6 +57,18 @@ The phone login needs a GitHub **OAuth App** Client ID (free, 2 minutes):
 > paste a fine-grained Personal Access Token with `repo` scope (backend method
 > `set_pat`).
 
+## Release channels
+
+| Channel | Tag | Shown as | Who gets it |
+|---|---|---|---|
+| **Stable** | `v0.1.0` | Latest | everyone (default) |
+| **Beta** | `v0.2.0-beta.1` | Pre-release | only with **Beta channel** enabled in the plugin |
+
+The plugin checks GitHub once a day and offers the newest build **on your
+channel**. Updates install through Decky's own installer, which verifies the
+zip's SHA-256 before swapping the files. Turning the beta channel back off offers
+you the stable build again (rollback).
+
 ## Install
 
 Grab `SaveWaypoint.zip` from the [latest release](../../releases/latest) — it is
@@ -110,6 +122,19 @@ scripts/package.sh         builds release/SaveWaypoint.zip
   here are public technical facts about each emulator, compiled independently, so
   there is no CC-BY-NC-SA ("non-commercial") data baggage.
 - Your saves live in *your* GitHub repo under *your* account.
+
+## Cutting a release
+
+```bash
+# 1. set the version (the tag must match package.json)
+#    stable: 0.3.0        beta: 0.3.0-beta.1
+# 2. commit, then tag with the title you want on the release page
+git tag -a v0.3.0 -m "v0.3.0 — Auto-backup on game close"
+git push origin v0.3.0
+```
+
+CI builds the zip, names the release after the tag's message and marks anything
+containing `-beta` / `-rc` / `-alpha` as a pre-release.
 
 ## Roadmap
 
