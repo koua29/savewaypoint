@@ -116,14 +116,33 @@ def _form_request(url, fields):
 
 # --- Device flow -------------------------------------------------------------
 
+# GitHub's actual error codes for this endpoint, mapped to something a user can
+# act on without reading the API docs.
+_DEVICE_START_ERRORS = {
+    "device_flow_disabled":
+        "Device Flow is not enabled on this OAuth App. Open "
+        "github.com/settings/developers, pick the app, tick 'Enable Device Flow' "
+        "and press Update application.",
+    "unauthorized_client":
+        "this OAuth App is not allowed to use Device Flow - tick 'Enable Device "
+        "Flow' on its GitHub settings page.",
+    "Not Found":
+        "GitHub does not know this Client ID. Copy it again from "
+        "github.com/settings/developers (it is not your username).",
+    "incorrect_client_credentials":
+        "GitHub rejected this Client ID - copy it again from the OAuth App page.",
+}
+
+
 def device_start(client_id, scope="repo"):
     r = _form_request(DEVICE_CODE_URL, {"client_id": client_id, "scope": scope})
     if "device_code" not in r:
-        msg = r.get("error_description") or r.get("error") or "device_code request failed"
-        if r.get("error") == "unauthorized_client":
-            msg = ("this OAuth App does not have Device Flow enabled - tick "
-                   "'Enable Device Flow' on its GitHub settings page")
-        raise GitHubError(msg)
+        err = r.get("error") or ""
+        raise GitHubError(
+            _DEVICE_START_ERRORS.get(err)
+            or r.get("error_description")
+            or err
+            or "GitHub refused the sign-in request")
     return r  # device_code, user_code, verification_uri, interval, expires_in
 
 
