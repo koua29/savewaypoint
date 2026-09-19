@@ -137,6 +137,100 @@ function VersionPicker({
   );
 }
 
+/** The full save list lives in a modal, not in the quick-access panel.
+ *  The panel must stay short and a fixed height whatever the library size;
+ *  inline, a dozen games turned it into an endless scroll. */
+function SaveManagerModal({
+  initial,
+  onToggle,
+  onTest,
+  onRestore,
+  onHistory,
+  closeModal,
+}: {
+  initial: Entry[];
+  onToggle: (id: string, on: boolean) => Promise<void>;
+  onTest: (e: Entry) => void;
+  onRestore: (e: Entry) => void;
+  onHistory: (e: Entry) => void;
+  closeModal?: () => void;
+}) {
+  const [items, setItems] = useState<Entry[]>(initial);
+  const [onlyOn, setOnlyOn] = useState(false);
+
+  const flip = async (id: string, on: boolean) => {
+    setItems((list) => list.map((x) => (x.id === id ? { ...x, selected: on } : x)));
+    await onToggle(id, on);
+  };
+
+  const shown = onlyOn ? items.filter((x) => x.selected) : items;
+  const count = items.filter((x) => x.selected).length;
+
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Manage saves</div>
+      <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: "10px" }}>
+        {`${count} of ${items.length} will sync. Nothing is uploaded until you press Back up now.`}
+      </div>
+      <ToggleField
+        label="Only show what I sync"
+        checked={onlyOn}
+        onChange={setOnlyOn}
+      />
+      <Focusable
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          maxHeight: "55vh",
+          overflowY: "auto",
+        }}
+      >
+        {shown.map((e) => (
+          <div key={e.id} style={{ borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+            <ToggleField
+              label={`${DOT[e.status]} ${e.name}`}
+              description={`${e.steam_cloud ? "☁️ " : ""}${HINT[e.status]} · ${
+                e.file_count
+              } files · ${humanSize(e.size_bytes)}`}
+              checked={e.selected}
+              disabled={e.status === "red"}
+              onChange={(v) => flip(e.id, v)}
+            />
+            {e.selected && (
+              <Focusable style={{ display: "flex", gap: "6px", padding: "0 0 10px" }}>
+                <DialogButton
+                  style={ACTION_BTN}
+                  onClick={() => onTest(e)}
+                  onOKActionDescription="Check it works (no upload)"
+                >
+                  <FaVial />
+                </DialogButton>
+                <DialogButton
+                  style={ACTION_BTN}
+                  onClick={() => onRestore(e)}
+                  onOKActionDescription="Restore from cloud"
+                >
+                  <FaDownload />
+                </DialogButton>
+                <DialogButton
+                  style={ACTION_BTN}
+                  onClick={() => onHistory(e)}
+                  onOKActionDescription="Older versions"
+                >
+                  <FaHistory />
+                </DialogButton>
+              </Focusable>
+            )}
+          </div>
+        ))}
+        {shown.length === 0 && (
+          <div style={{ opacity: 0.7, padding: "12px 0" }}>Nothing to show.</div>
+        )}
+      </Focusable>
+    </ModalRoot>
+  );
+}
+
 const DOT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
 
 // Kept terse: the panel is ~310px wide, so a long line wraps to three rows and
@@ -400,6 +494,19 @@ function Content() {
     );
   };
 
+  // The manager keeps its own copy while open; `toggle` also updates the panel's
+  // list, so the "x of y will sync" summary stays right after it closes.
+  const openManager = () =>
+    showModal(
+      <SaveManagerModal
+        initial={entries}
+        onToggle={toggle}
+        onTest={doTest}
+        onRestore={doRestore}
+        onHistory={doHistory}
+      />
+    );
+
   const doTest = async (e: Entry) => {
     const r = await testEntry(e.id);
     if (!r.ok) {
@@ -598,83 +705,23 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title={`Detected saves (${entries.length})`}>
-        {/* The switch only marks a save for syncing; nothing is ever uploaded
-            without pressing Back up now. Saying so here because a toggle reads
-            like it performs the action. */}
+      <PanelSection title="Saves">
+        <PanelSectionRow>
+          <span style={{ fontSize: "0.85em", opacity: 0.8 }}>
+            {entries.length === 0
+              ? scanned
+                ? "Nothing found yet. Launch a game, save once, then rescan."
+                : "Scanning…"
+              : `${selected.length} of ${entries.length} will sync`}
+          </span>
+        </PanelSectionRow>
         {entries.length > 0 && (
           <PanelSectionRow>
-            <span style={{ fontSize: "0.8em", opacity: 0.75 }}>
-              Switch on what to sync, then press <b>Back up now</b>. Nothing is
-              uploaded until you do.
-            </span>
+            <ButtonItem layout="below" onClick={openManager}>
+              Manage saves…
+            </ButtonItem>
           </PanelSectionRow>
         )}
-        {entries.length === 0 && (
-          <PanelSectionRow>
-            {scanned
-              ? "Nothing found yet. Launch a game, save once, then rescan."
-              : "Scanning…"}
-          </PanelSectionRow>
-        )}
-        {entries.map((e) => (
-          <PanelSectionRow key={e.id}>
-            <Focusable style={{ display: "flex", flexDirection: "column", width: "100%" }}>
-              <ToggleField
-                label={`${DOT[e.status]} ${e.name}`}
-                description={`${e.steam_cloud ? "☁️ " : ""}${HINT[e.status]} · ${
-                  e.file_count
-                } files · ${humanSize(e.size_bytes)}`}
-                checked={e.selected}
-                disabled={e.status === "red"}
-                onChange={(v) => toggle(e.id, v)}
-              />
-              {/* Only for saves actually being synced: restoring or browsing the
-                  history of an unselected game is meaningless, and showing the
-                  row for every entry triples the length of the list. */}
-              {e.selected && (
-                <>
-                  <span
-                    style={{
-                      fontSize: "0.72em",
-                      opacity: 0.6,
-                      paddingBottom: "3px",
-                    }}
-                  >
-                    check · restore · older versions
-                  </span>
-                <Focusable
-                  style={{ display: "flex", gap: "6px", paddingBottom: "10px" }}
-                >
-                  <DialogButton
-                    style={ACTION_BTN}
-                    onClick={() => doTest(e)}
-                    onOKActionDescription="Check it works (no upload)"
-                  >
-                    <FaVial />
-                  </DialogButton>
-                  <DialogButton
-                    style={ACTION_BTN}
-                    disabled={busy}
-                    onClick={() => doRestore(e)}
-                    onOKActionDescription="Restore from cloud"
-                  >
-                    <FaDownload />
-                  </DialogButton>
-                  <DialogButton
-                    style={ACTION_BTN}
-                    disabled={busy}
-                    onClick={() => doHistory(e)}
-                    onOKActionDescription="Older versions"
-                  >
-                    <FaHistory />
-                  </DialogButton>
-                </Focusable>
-                </>
-              )}
-            </Focusable>
-          </PanelSectionRow>
-        ))}
       </PanelSection>
 
       <PanelSection title="Options">

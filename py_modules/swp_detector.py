@@ -267,6 +267,33 @@ def _entry(name, source, path, status, stats=None):
     }
 
 
+SAVE_DIR_HINTS = ("savegame", "savegames", "saves", "save", "savedata", "savefiles")
+SAVE_FILE_EXTS = (".sav", ".save", ".savegame", ".sgd", ".dat")
+
+
+def _save_evidence(path, max_nodes=4000):
+    """True when the tree actually contains save-shaped things: a SaveGames-style
+    folder or .sav files.
+
+    Location alone is a poor confidence signal - real games keep their saves under
+    AppData/Local, a 'weak' hint, so judging by path left every entry amber, and a
+    flag raised on every row carries no information. Evidence found inside is what
+    separates a certain hit from a guess."""
+    seen = 0
+    for root, dirs, files in os.walk(path):
+        for d in dirs:
+            if d.lower() in SAVE_DIR_HINTS:
+                return True
+            seen += 1
+        for f in files:
+            if f.lower().endswith(SAVE_FILE_EXTS):
+                return True
+            seen += 1
+        if seen >= max_nodes:
+            return False
+    return False
+
+
 def _looks_like_save(path, name):
     """Cheap heuristic for WEAK hints: the folder or one of its immediate
     children mentions 'save'."""
@@ -363,8 +390,12 @@ def scan_proton():
                         label = f"{child} (Steam app {appid})"
                     else:
                         label = f"{child} (non-Steam {appid})"
+                    # Green when the folder actually holds save-shaped content,
+                    # or when a named shortcut keeps it in a dedicated save
+                    # location. Amber is then reserved for the genuinely unsure.
+                    confident = _save_evidence(cpath) or (bool(game) and strong)
                     e = _entry(label, "steam" if is_steam else "proton",
-                               cpath, "yellow", stats)
+                               cpath, "green" if confident else "yellow", stats)
                     e["steam_cloud"] = is_steam
                     e["appid"] = appid_n
                     out.append(e)
