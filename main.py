@@ -90,7 +90,8 @@ class Plugin:
         now = time.time()
         if not force and self._scan_cache and now - self._scan_cache[0] < SCAN_TTL:
             return self._scan_cache[1]
-        entries = detector.full_scan(self.settings.get("watched"))
+        entries = detector.full_scan(self.settings.get("watched"),
+                                     show_steam=bool(self.settings.get("show_steam")))
         self._scan_cache = (now, entries)
         return entries
 
@@ -105,7 +106,13 @@ class Plugin:
             "selected": s.get("selected"),
             "auto_backup": s.get("auto_backup"),
             "watched": s.get("watched"),
+            "show_steam": s.get("show_steam"),
         }
+
+    async def set_show_steam(self, enabled: bool):
+        self.settings.set("show_steam", bool(enabled))
+        self._scan_cache = None
+        return {"ok": True}
 
     async def set_client_id(self, client_id: str):
         raw = (client_id or "").strip()

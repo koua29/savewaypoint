@@ -32,6 +32,7 @@ const setSelection = callable<[string[]], any>("set_selection");
 const backup = callable<[string[] | null], any>("backup");
 const restore = callable<[string, string | null], any>("restore");
 const testEntry = callable<[string], any>("test_entry");
+const setShowSteam = callable<[boolean], any>("set_show_steam");
 const historyOf = callable<[string], any>("history");
 const getVersion = callable<[], any>("get_version");
 const setBeta = callable<[boolean], any>("set_beta");
@@ -93,6 +94,7 @@ type Entry = {
   file_count: number;
   size_bytes: number;
   selected: boolean;
+  steam_cloud: boolean;
 };
 
 type Commit = { sha: string; date: string; message: string };
@@ -581,6 +583,18 @@ function Content() {
       </PanelSection>
 
       <PanelSection title="Detected saves">
+        <PanelSectionRow>
+          <ToggleField
+            label="Include Steam games"
+            description="Off by default: Steam Cloud already syncs them. Turn on only for games without Cloud support."
+            checked={!!status.show_steam}
+            onChange={async (v) => {
+              setStatus((s: any) => ({ ...s, show_steam: v }));
+              await setShowSteam(v);
+              doScan(true);
+            }}
+          />
+        </PanelSectionRow>
         {entries.length === 0 && (
           <PanelSectionRow>
             {scanned
@@ -593,7 +607,9 @@ function Content() {
             <Focusable style={{ display: "flex", flexDirection: "column", width: "100%" }}>
               <ToggleField
                 label={`${DOT[e.status]} ${e.name}`}
-                description={`${HINT[e.status]} · ${e.file_count} files · ${humanSize(
+                description={`${
+                  e.steam_cloud ? "☁️ Steam Cloud covers this · " : ""
+                }${HINT[e.status]} · ${e.file_count} files · ${humanSize(
                   e.size_bytes
                 )}`}
                 checked={e.selected}

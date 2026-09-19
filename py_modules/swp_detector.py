@@ -130,7 +130,89 @@ PROTON_BLOCKLIST = {
     "D3DSCache", "NVIDIA", "NVIDIA Corporation", "Steam", "Google", "Mozilla",
     "Adobe", "Intel", "AMD", "Valve", "wineboot", "Programs", "Comms",
     "IsolatedStorage", "History", "Application Data", "GameBarPresenceWriter",
+    # Already walked as STRONG hints; reaching them again through the weaker
+    # "Documents" hint would list the whole container next to its own games.
+    "My Games", "Saved Games", "SavedGames",
 }
+
+STEAM_USERDATA = [
+    ".local/share/Steam/userdata",
+    ".steam/steam/userdata",
+]
+
+# Steam gives a non-Steam shortcut a generated AppID with the top bit set, so it
+# always lands above 2^31; real Steam AppIDs are ordinary small integers. That is
+# what separates "Steam Cloud already covers this" from "nobody is backing it up".
+NON_STEAM_APPID_MIN = 2 ** 31
+
+
+def _parse_binary_vdf(data):
+    """Minimal reader for Steam's binary VDF (shortcuts.vdf):
+    0x00 map, 0x01 string, 0x02 int32, 0x07 uint64, 0x08 end-of-map."""
+    pos = 0
+
+    def cstring():
+        nonlocal pos
+        end = data.index(b"\x00", pos)
+        s = data[pos:end].decode("utf-8", "replace")
+        pos = end + 1
+        return s
+
+    def parse_map():
+        nonlocal pos
+        out = {}
+        while pos < len(data):
+            kind = data[pos]
+            pos += 1
+            if kind == 0x08:
+                return out
+            key = cstring().lower()
+            if kind == 0x00:
+                out[key] = parse_map()
+            elif kind == 0x01:
+                out[key] = cstring()
+            elif kind == 0x02:
+                out[key] = int.from_bytes(data[pos:pos + 4], "little")
+                pos += 4
+            elif kind == 0x07:
+                out[key] = int.from_bytes(data[pos:pos + 8], "little")
+                pos += 8
+            else:
+                raise ValueError(f"unknown VDF type {kind}")
+        return out
+
+    return parse_map()
+
+
+def shortcut_names():
+    """AppID -> name for non-Steam games added to Steam, from each user's
+    shortcuts.vdf. Best effort: a parse failure only costs nicer labels, so it
+    must never break a scan."""
+    names = {}
+    for base_rel in STEAM_USERDATA:
+        base = _p(base_rel)
+        if not os.path.isdir(base):
+            continue
+        try:
+            users = os.listdir(base)
+        except OSError:
+            continue
+        for user in users:
+            path = os.path.join(base, user, "config", "shortcuts.vdf")
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "rb") as f:
+                    parsed = _parse_binary_vdf(f.read())
+            except Exception:
+                continue
+            for entry in (parsed.get("shortcuts") or {}).values():
+                if not isinstance(entry, dict):
+                    continue
+                appid, name = entry.get("appid"), entry.get("appname")
+                if isinstance(appid, int) and name:
+                    names[appid] = name
+    return names
 
 
 def _stat_folder(path, max_files=MAX_FILES_PER_ENTRY):
@@ -159,6 +241,10 @@ def _make_id(source, path):
 
 
 def _entry(name, source, path, status, stats=None):
+    # Canonical path: ~/.steam/steam is a symlink to ~/.local/share/Steam on
+    # SteamOS, so the same folder reached by both spellings would otherwise be
+    # listed (and archived) twice.
+    path = os.path.realpath(path)
     if stats is None:
         stats = _stat_folder(path) if os.path.isdir(path) else (0, 0, 0.0, False)
     count, size, newest, truncated = stats
@@ -175,6 +261,9 @@ def _entry(name, source, path, status, stats=None):
         "size_bytes": size,
         "last_modified": newest,
         "truncated": truncated,
+        # True only for real Steam games, which Steam Cloud already syncs.
+        "steam_cloud": False,
+        "appid": 0,
     }
 
 
@@ -207,10 +296,16 @@ def scan_emulators():
 
 
 def scan_proton():
-    """Heuristic pass over Proton prefixes -> YELLOW entries (need confirming)."""
+    """Heuristic pass over Proton prefixes -> YELLOW entries (need confirming).
+
+    compatdata holds both real Steam games and non-Steam shortcuts. Each entry is
+    tagged so the UI can hide the Steam ones, which Steam Cloud already covers and
+    which we should not be racing to back up in parallel.
+    """
     out = []
     seen = set()
     cutoff = time.time() - PROTON_RECENT_DAYS * 86400
+    names = shortcut_names()
 
     for base_rel in STEAM_COMPATDATA:
         base = _p(base_rel)
@@ -239,7 +334,10 @@ def scan_proton():
                     if child in PROTON_BLOCKLIST or child.startswith("."):
                         continue
                     cpath = os.path.join(hint_path, child)
-                    if cpath in seen or not os.path.isdir(cpath):
+                    if not os.path.isdir(cpath):
+                        continue
+                    real = os.path.realpath(cpath)
+                    if real in seen:
                         continue
                     if not strong and not _looks_like_save(cpath, child):
                         continue
@@ -252,9 +350,24 @@ def scan_proton():
                     stats = _stat_folder(cpath, max_files=2000)
                     if stats[0] == 0 or stats[2] < cutoff:
                         continue
-                    seen.add(cpath)
-                    out.append(_entry(f"{child} (Proton {appid})", "proton",
-                                      cpath, "yellow", stats))
+                    seen.add(real)
+                    try:
+                        appid_n = int(appid)
+                    except ValueError:
+                        appid_n = 0
+                    is_steam = 0 < appid_n < NON_STEAM_APPID_MIN
+                    game = names.get(appid_n)
+                    if game:
+                        label = f"{child} — {game}"
+                    elif is_steam:
+                        label = f"{child} (Steam app {appid})"
+                    else:
+                        label = f"{child} (non-Steam {appid})"
+                    e = _entry(label, "steam" if is_steam else "proton",
+                               cpath, "yellow", stats)
+                    e["steam_cloud"] = is_steam
+                    e["appid"] = appid_n
+                    out.append(e)
                     if len(out) >= MAX_PROTON_CANDIDATES:
                         return out
     return out
@@ -286,11 +399,16 @@ def _drop_nested(entries):
     return [e for e in entries if e["id"] in kept_ids]
 
 
-def full_scan(watched_paths=None):
+def full_scan(watched_paths=None, show_steam=False):
+    """show_steam=False (the default) drops real Steam games: Steam Cloud already
+    syncs them, so listing them is noise at best and a second writer racing Steam
+    at worst. Games without Cloud support are the reason it stays switchable."""
     entries = []
     entries.extend(scan_emulators())
     entries.extend(scan_proton())
     entries.extend(scan_watched(watched_paths or []))
+    if not show_steam:
+        entries = [e for e in entries if not e.get("steam_cloud")]
 
     # De-duplicate identical paths, then drop nested ones.
     unique = {}

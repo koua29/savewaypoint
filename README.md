@@ -26,6 +26,11 @@ subscription, git history gives you free version restore.**
 
 ### What makes it different from existing sync plugins
 
+- **Steam games are left alone.** Steam Cloud already syncs them, and a second
+  writer racing it is worse than useless. `compatdata` holds Steam games and
+  non-Steam shortcuts side by side, so they are told apart by AppID (Steam
+  generates shortcut IDs above 2³¹) and only the non-Steam ones are listed.
+  Switchable, for the games Steam Cloud does not cover.
 - **Auto-detection with a confidence status**, instead of typing paths by hand:
   - 🟢 **Detected** — a known emulator location with files present. Safe to sync.
   - 🟡 **Probable** — a save-looking folder found inside a Proton prefix. You

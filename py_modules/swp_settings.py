@@ -20,6 +20,7 @@ DEFAULTS = {
     "watched": [],            # user-added custom folders
     "auto_backup": False,
     "beta": False,            # release channel: beta pre-releases or stable only
+    "show_steam": False,      # list real Steam games too (Steam Cloud covers them)
 }
 
 
