@@ -37,6 +37,19 @@ jobs:
       - name: Check Python backend compiles
         run: python3 -m compileall -q main.py py_modules
 
+      # py_modules lands on the same sys.path as Decky Loader's own modules, so a
+      # generic name silently shadows theirs (an updater.py once resolved to
+      # decky_loader.updater and every update check raised AttributeError).
+      - name: Guard against module name collisions
+        run: |
+          bad=$(find py_modules -maxdepth 1 -name '*.py' ! -name 'swp_*' -print)
+          if [ -n "$bad" ]; then
+            echo "::error::py_modules files must be prefixed swp_ to avoid shadowing Decky modules:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "all py_modules are namespaced"
+
       - name: Build installable zip
         run: |
           chmod +x scripts/package.sh

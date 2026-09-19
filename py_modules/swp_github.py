@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
-from net import SSL_CONTEXT, describe_tls
+from swp_net import SSL_CONTEXT, describe_tls
 
 API = "https://api.github.com"
 DEVICE_CODE_URL = "https://github.com/login/device/code"

@@ -13,9 +13,9 @@ import asyncio
 
 import decky  # provided by Decky Loader at runtime
 
-import detector
-import github_store as gh
-import updater
+import swp_detector as detector
+import swp_github as gh
+import swp_updater as updater
 from swp_settings import Settings
 
 SCAN_TTL = 20.0  # seconds a scan result stays usable (toggling must not rescan)

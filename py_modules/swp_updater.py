@@ -14,7 +14,7 @@ import json
 import urllib.request
 import urllib.error
 
-from net import SSL_CONTEXT
+from swp_net import SSL_CONTEXT
 
 REPO = "koua29/savewaypoint"
 ZIP_NAME = "SaveWaypoint.zip"
