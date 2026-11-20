@@ -6,6 +6,8 @@
 
 <p align="center"><i>Set a waypoint for your game saves.</i></p>
 
+<p align="center">🇺🇸 <b>English</b> · 🇫🇷 <a href="README.fr.md">Français</a></p>
+
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for the
 Steam Deck / SteamOS handhelds that **auto-detects your non-Steam game saves**
 (emulators, Proton games) and syncs them to **your own private GitHub repo** — so
