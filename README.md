@@ -170,3 +170,28 @@ containing `-beta` / `-rc` / `-alpha` as a pre-release.
 - In-plugin version picker (restore an older commit).
 - Optional Google Drive / OneDrive backends (same rclone-style abstraction).
 - QR code rendering for the login code.
+
+---
+
+## 🛒 Steam Deck gear
+
+*Amazon affiliate links: if you buy through these links, the project earns a small commission at no extra cost to you.*
+
+<table>
+<tr>
+<td align="center" width="33%">
+  <a href="https://www.amazon.com/dp/B0B2DCZDJZ?linkCode=ll2&amp;tag=koua29swp-20&amp;ref_=as_li_ss_tl"><img src="assets/amazon-B0B2DCZDJZ.jpg" width="200" alt="SanDisk Extreme 256 GB microSD"></a><br>
+  <b><a href="https://www.amazon.com/dp/B0B2DCZDJZ?linkCode=ll2&amp;tag=koua29swp-20&amp;ref_=as_li_ss_tl">SanDisk Extreme 256 GB microSD</a></b><br><sub>Room for the games and saves you sync</sub>
+</td>
+<td align="center" width="33%">
+  <a href="https://www.amazon.com/dp/B0BRK96DJX?linkCode=ll2&amp;tag=koua29swp-20&amp;ref_=as_li_ss_tl"><img src="assets/amazon-B0BRK96DJX.jpg" width="200" alt="JSAUX hard case"></a><br>
+  <b><a href="https://www.amazon.com/dp/B0BRK96DJX?linkCode=ll2&amp;tag=koua29swp-20&amp;ref_=as_li_ss_tl">JSAUX hard case</a></b><br><sub>Protects the Deck in your bag</sub>
+</td>
+<td align="center" width="33%">
+  <a href="https://www.amazon.com/dp/B09TPF6NQ8?linkCode=ll2&amp;tag=koua29swp-20&amp;ref_=as_li_ss_tl"><img src="assets/amazon-B09TPF6NQ8.jpg" width="200" alt="amFilm tempered glass"></a><br>
+  <b><a href="https://www.amazon.com/dp/B09TPF6NQ8?linkCode=ll2&amp;tag=koua29swp-20&amp;ref_=as_li_ss_tl">amFilm tempered glass</a></b><br><sub>Keeps the screen scratch-free</sub>
+</td>
+</tr>
+</table>
+
+<sub>As an Amazon Associate I earn from qualifying purchases.</sub>
