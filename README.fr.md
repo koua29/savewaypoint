@@ -169,3 +169,28 @@ La CI construit le zip, nomme la release d'après le message du tag et marque to
 - Sélecteur de version dans le plugin (restaurer un commit plus ancien).
 - Backends Google Drive / OneDrive optionnels (même abstraction façon rclone).
 - Rendu d'un QR code pour le code de connexion.
+
+---
+
+## 🛒 Accessoires Steam Deck
+
+*Liens partenaires Amazon : si vous achetez via ces liens, le projet touche une petite commission, sans surcoût pour vous.*
+
+<table>
+<tr>
+<td align="center" width="33%">
+  <a href="https://www.amazon.fr/dp/B0B2DCZDJZ?linkCode=ll2&amp;tag=koua29swp-21&amp;ref_=as_li_ss_tl"><img src="assets/amazon-B0B2DCZDJZ.jpg" width="200" alt="microSD SanDisk Extreme 256 Go"></a><br>
+  <b><a href="https://www.amazon.fr/dp/B0B2DCZDJZ?linkCode=ll2&amp;tag=koua29swp-21&amp;ref_=as_li_ss_tl">microSD SanDisk Extreme 256 Go</a></b><br><sub>De la place pour les jeux et sauvegardes synchronisés</sub>
+</td>
+<td align="center" width="33%">
+  <a href="https://www.amazon.fr/dp/B0BRK96DJX?linkCode=ll2&amp;tag=koua29swp-21&amp;ref_=as_li_ss_tl"><img src="assets/amazon-B0BRK96DJX.jpg" width="200" alt="Coque rigide JSAUX"></a><br>
+  <b><a href="https://www.amazon.fr/dp/B0BRK96DJX?linkCode=ll2&amp;tag=koua29swp-21&amp;ref_=as_li_ss_tl">Coque rigide JSAUX</a></b><br><sub>Protège le Deck dans ton sac</sub>
+</td>
+<td align="center" width="33%">
+  <a href="https://www.amazon.fr/dp/B09TPF6NQ8?linkCode=ll2&amp;tag=koua29swp-21&amp;ref_=as_li_ss_tl"><img src="assets/amazon-B09TPF6NQ8.jpg" width="200" alt="Verre trempé amFilm"></a><br>
+  <b><a href="https://www.amazon.fr/dp/B09TPF6NQ8?linkCode=ll2&amp;tag=koua29swp-21&amp;ref_=as_li_ss_tl">Verre trempé amFilm</a></b><br><sub>Garde l'écran sans rayures</sub>
+</td>
+</tr>
+</table>
+
+<sub>En tant que Partenaire Amazon, je réalise un bénéfice sur les achats remplissant les conditions requises.</sub>
